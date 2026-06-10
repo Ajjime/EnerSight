@@ -1,0 +1,310 @@
+@import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900;1000&display=swap");
+@import "tailwindcss";
+
+:root {
+  font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --energy-dark: #020617;
+  --energy-green: #047857;
+  --energy-green-light: #10b981;
+  --energy-lime: #a3e635;
+  --energy-bg: #f8fafc;
+  --energy-card: #ffffff;
+  --energy-border: #e2e8f0;
+  --energy-text: #0f172a;
+  --energy-muted: #64748b;
+  --energy-warning: #f59e0b;
+  --energy-danger: #ef4444;
+  --energy-info: #2563eb;
+
+  color: var(--energy-text);
+  background: var(--energy-bg);
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  width: 100%;
+  background: var(--energy-bg);
+  font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+}
+
+.energy-page {
+  @apply space-y-6;
+}
+
+.energy-card {
+  @apply rounded-[1.7rem] border border-slate-200 bg-white shadow-sm;
+}
+
+.energy-soft-card {
+  @apply rounded-[1.7rem] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-slate-50 to-lime-50 shadow-sm;
+}
+
+.energy-title {
+  @apply text-2xl font-black tracking-tight text-slate-950;
+}
+
+.energy-subtitle {
+  @apply mt-1 text-sm font-bold leading-6 text-slate-500;
+}
+
+.energy-label {
+  @apply text-xs font-black uppercase tracking-[0.18em] text-slate-400;
+}
+
+.energy-input {
+  @apply w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white;
+}
+
+.energy-button-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.energy-button-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50;
+}
+
+.energy-button-danger {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white transition hover:bg-red-700;
+}
+
+.energy-badge-green {
+  @apply inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700;
+}
+
+.energy-badge-amber {
+  @apply inline-flex items-center gap-2 rounded-full border border-amber-100 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700;
+}
+
+.energy-badge-red {
+  @apply inline-flex items-center gap-2 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-black text-red-700;
+}
+
+.energy-badge-blue {
+  @apply inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-black text-blue-700;
+}
+
+.energy-icon-green {
+  @apply grid h-12 w-12 place-items-center rounded-2xl bg-emerald-700 text-white;
+}
+
+.energy-icon-lime {
+  @apply grid h-12 w-12 place-items-center rounded-2xl bg-lime-400 text-slate-950;
+}
+
+.energy-icon-amber {
+  @apply grid h-12 w-12 place-items-center rounded-2xl bg-amber-500 text-white;
+}
+
+.energy-icon-red {
+  @apply grid h-12 w-12 place-items-center rounded-2xl bg-red-500 text-white;
+}
+
+.energy-table-head {
+  @apply bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400;
+}
+
+.energy-table-cell {
+  @apply px-4 py-3 text-sm font-bold text-slate-600;
+}
+
+/* Perf: promote sticky header to its own compositor layer */
+header[class*="sticky"] {
+  will-change: transform;
+  contain: layout style;
+}
+
+/* Leaflet map safe fix */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+.leaflet-container img {
+  max-width: none;
+}
+
+.energy-map-shell {
+  position: relative;
+  isolation: isolate;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.energy-map-shell .leaflet-container {
+  position: relative;
+  z-index: 0;
+}
+
+/* Toast animation */
+@keyframes energyFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: energyFadeIn 0.22s ease-out both;
+}
+
+/* OCR panel animations */
+@keyframes energyFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-up {
+  animation: energyFadeUp 0.3s ease-out both;
+}
+
+@keyframes energyImageIn {
+  from {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-image-in {
+  animation: energyImageIn 0.35s ease-out both;
+}
+
+@keyframes energyPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+
+  60% {
+    transform: scale(1.04);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop {
+  animation: energyPop 0.3s ease-out both;
+}
+
+/* Moving scan line used while OCR is running */
+@keyframes energyScan {
+  0% {
+    top: 0;
+    opacity: 0;
+  }
+
+  15% {
+    opacity: 1;
+  }
+
+  85% {
+    opacity: 1;
+  }
+
+  100% {
+    top: 100%;
+    opacity: 0;
+  }
+}
+
+.animate-scan-line {
+  animation: energyScan 1.4s ease-in-out infinite;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+@media print {
+  @page {
+    size: A4;
+    margin: 0;
+  }
+
+  aside,
+  header,
+  nav {
+    display: none !important;
+  }
+
+  main {
+    padding-left: 0 !important;
+    min-height: unset !important;
+  }
+
+  main > div {
+    padding: 0 !important;
+    background: white !important;
+  }
+
+  body,
+  #root {
+    background: white !important;
+  }
+}
