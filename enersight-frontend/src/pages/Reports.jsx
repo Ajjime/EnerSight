@@ -26,11 +26,14 @@ import HeaderActionButton from "../components/HeaderActionButton";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
-import { formatNumber } from "../utils/format";
+import { formatDecimal, formatNumber } from "../utils/format";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import {
+  MIN_DAYS_TO_ANNUALIZE,
   annotateReadingCoverage,
+  annualizeEui,
+  computeEui,
   getEnergyStatus,
   getReadingSpanDays,
 } from "../utils/energyStatus";
@@ -44,7 +47,15 @@ import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import SkeletonRows from "../components/SkeletonRows";
+import {
+  PERIOD_OPTIONS,
+  formatPeriodLabel,
+  getPeriodWindows,
+  isInWindow,
+  isInvalidCustomRange,
+} from "../utils/periods";
 const AUTO_REFRESH_MS = 60000;
+const DAYS_PER_MONTH = 365 / 12;
 
 const reportTypes = [
   "Monthly Building Report",
@@ -52,8 +63,6 @@ const reportTypes = [
   "Meter Photo Check Report",
   "Audit Support Report",
 ];
-
-const periodOptions = ["All Time", "This Month", "Last Month", "This Year"];
 
 function normalizeBuilding(building) {
   return {
@@ -121,50 +130,6 @@ function formatDateTime(value) {
   return date.toLocaleString();
 }
 
-function isReadingInPeriod(readingDate, period) {
-  if (period === "All Time") {
-    return true;
-  }
-
-  if (!readingDate) {
-    return false;
-  }
-
-  const date = new Date(readingDate);
-
-  if (Number.isNaN(date.getTime())) {
-    return false;
-  }
-
-  const now = new Date();
-
-  const sameMonth =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth();
-
-  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-
-  const sameLastMonth =
-    date.getFullYear() === lastMonthDate.getFullYear() &&
-    date.getMonth() === lastMonthDate.getMonth();
-
-  const sameYear = date.getFullYear() === now.getFullYear();
-
-  if (period === "This Month") {
-    return sameMonth;
-  }
-
-  if (period === "Last Month") {
-    return sameLastMonth;
-  }
-
-  if (period === "This Year") {
-    return sameYear;
-  }
-
-  return true;
-}
-
 function getStatusStyle(status) {
   if (status === "Normal" || status === "Verified") {
     return "border-emerald-100 bg-emerald-50 text-emerald-700";
@@ -200,6 +165,10 @@ function getAccuracyStyle(accuracy) {
 
 function getReadingStatus(reading) {
   return reading.is_verified ? "Verified" : "Needs Review";
+}
+
+function formatReportEui(row) {
+  return row.status === "No Data" ? "—" : formatDecimal(row.eui, 1);
 }
 
 // The status rule now lives in utils/energyStatus.js. This page used to grade by
@@ -268,10 +237,12 @@ function ReportDetailsModal({ report, onClose }) {
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-              Average Reading
+              Per Month
             </p>
             <p className="mt-2 text-lg font-semibold text-slate-950">
-              {formatNumber(report.averageReading)} kWh
+              {report.monthlyConsumption === null
+                ? "—"
+                : `${formatNumber(report.monthlyConsumption)} kWh`}
             </p>
           </div>
 
@@ -320,10 +291,10 @@ function ReportDetailsModal({ report, onClose }) {
 function PrintTemplate({
   reportType,
   buildingFilter,
-  periodFilter,
+  periodLabel,
   totalConsumption,
   totalCost,
-  averageReading,
+  monthlyConsumption,
   highestReading,
   verifiedCount,
   pendingCount,
@@ -405,7 +376,7 @@ function PrintTemplate({
         {[
           { label: "Report Type", value: reportType },
           { label: "Building", value: buildingFilter },
-          { label: "Period", value: periodFilter },
+          { label: "Period", value: periodLabel },
           { label: "Total Records", value: (buildingReportRows.reduce((s, r) => s + r.readingCount, 0)).toString() },
         ].map((item) => (
           <div key={item.label}>
@@ -431,11 +402,11 @@ function PrintTemplate({
             <div style={{ fontSize: "26px", fontWeight: 900, color: "#0f172a", margin: "6px 0 2px" }}>{formatNumber(totalConsumption)}</div>
             <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b" }}>kWh · ≈ {formatPeso(totalCost, { decimals: 0 })}</div>
           </div>
-          {/* Average */}
+          {/* Per month */}
           <div style={{ border: "1px solid #bfdbfe", borderRadius: "10px", padding: "14px 18px", background: "#eff6ff" }}>
-            <div style={{ fontSize: "10px", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em", color: "#3b82f6" }}>Average Reading</div>
-            <div style={{ fontSize: "26px", fontWeight: 900, color: "#1e40af", margin: "6px 0 2px" }}>{formatNumber(averageReading)}</div>
-            <div style={{ fontSize: "11px", fontWeight: 700, color: "#2563eb" }}>kWh per record</div>
+            <div style={{ fontSize: "10px", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em", color: "#3b82f6" }}>Per Month</div>
+            <div style={{ fontSize: "26px", fontWeight: 900, color: "#1e40af", margin: "6px 0 2px" }}>{monthlyConsumption === null ? "—" : formatNumber(monthlyConsumption)}</div>
+            <div style={{ fontSize: "11px", fontWeight: 700, color: "#2563eb" }}>kWh in an average month</div>
           </div>
           {/* Peak */}
           <div style={{ border: "1px solid #fecaca", borderRadius: "10px", padding: "14px 18px", background: "#fef2f2" }}>
@@ -460,7 +431,7 @@ function PrintTemplate({
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>
-              {["Building", "Meters", "Readings", "Total (kWh)", "Est. Cost (₱)", "Average", "Peak", "OCR Avg", "Status"].map((col, i) => (
+              {["Building", "Meters", "Readings", "Total (kWh)", "Est. Cost (₱)", "Per Month", "EUI", "OCR Avg", "Status"].map((col, i) => (
                 <th
                   key={col}
                   style={{
@@ -499,8 +470,8 @@ function PrintTemplate({
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{row.readingCount}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 900, color: "#0f172a" }}>{formatNumber(row.totalConsumption)}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 900, color: "#047857" }}>{formatPeso(row.estimatedCost, { decimals: 0 })}</td>
-                  <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{formatNumber(row.averageReading)}</td>
-                  <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{formatNumber(row.highestReading)}</td>
+                  <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{row.monthlyConsumption === null ? "—" : formatNumber(row.monthlyConsumption)}</td>
+                  <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 900, color: "#0f172a" }}>{formatReportEui(row)}</td>
                   <td style={{ padding: "11px 12px", textAlign: "center" }}>
                     <span style={{ display: "inline-block", padding: "3px 9px", borderRadius: "999px", fontSize: "11px", fontWeight: 900, ...accuracyBadge(row.averageAccuracy) }}>
                       {formatOcrAccuracy(row.averageAccuracy)}
@@ -646,6 +617,8 @@ const Reports = () => {
   const [reportType, setReportType] = useState("Monthly Building Report");
   const [buildingFilter, setBuildingFilter] = useState("All Buildings");
   const [periodFilter, setPeriodFilter] = useState("All Time");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [query, setQuery] = useState("");
 
   // Tells the two empty cases apart: nothing recorded yet vs. filters hiding
@@ -661,6 +634,8 @@ const Reports = () => {
     setReportType("Monthly Building Report");
     setBuildingFilter("All Buildings");
     setPeriodFilter("All Time");
+    setCustomFrom("");
+    setCustomTo("");
   }
   const [selectedReport, setSelectedReport] = useState(null);
   const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
@@ -799,6 +774,14 @@ const Reports = () => {
     intervalMs: AUTO_REFRESH_MS,
   });
 
+  const periodWindows = useMemo(
+    () => getPeriodWindows(periodFilter, customFrom, customTo),
+    [periodFilter, customFrom, customTo]
+  );
+  const currentWindow = periodWindows.current;
+  const periodLabel = formatPeriodLabel(periodFilter, customFrom, customTo);
+  const isCustomRangeInvalid = isInvalidCustomRange(periodFilter, customFrom, customTo);
+
   const filteredReadings = useMemo(() => {
     return readings.filter((reading) => {
       const meter = getMeter(reading.meter_id);
@@ -809,7 +792,7 @@ const Reports = () => {
       const matchesBuilding =
         buildingFilter === "All Buildings" || buildingName === buildingFilter;
 
-      const matchesPeriod = isReadingInPeriod(reading.reading_date, periodFilter);
+      const matchesPeriod = isInWindow(reading.reading_date, currentWindow);
 
       const matchesSearch =
         String(reading.record_id).includes(searchValue) ||
@@ -821,7 +804,7 @@ const Reports = () => {
 
       return matchesBuilding && matchesPeriod && matchesSearch;
     });
-  }, [readings, buildingFilter, periodFilter, query, getBuildingName, getMeter]);
+  }, [readings, buildingFilter, currentWindow, query, getBuildingName, getMeter]);
 
   const totalConsumption = filteredReadings.reduce(
     (sum, reading) => sum + reading.differential,
@@ -830,9 +813,14 @@ const Reports = () => {
 
   const totalCost = totalConsumption * rate;
 
-  const averageReading = filteredReadings.length
-    ? Math.round(totalConsumption / filteredReadings.length)
-    : 0;
+  // kWh per month over the days the readings cover. This used to be the average
+  // kWh per reading, which moves with how often readings are taken rather than
+  // with how much energy is used.
+  const overallSpanDays = getReadingSpanDays(filteredReadings);
+  const monthlyConsumption =
+    overallSpanDays >= MIN_DAYS_TO_ANNUALIZE
+      ? totalConsumption / (overallSpanDays / DAYS_PER_MONTH)
+      : null;
 
   const highestReading = filteredReadings.length
     ? Math.max(...filteredReadings.map((reading) => reading.differential))
@@ -866,9 +854,13 @@ const Reports = () => {
           0
         );
 
-        const buildingAverage = buildingReadings.length
-          ? Math.round(buildingTotal / buildingReadings.length)
-          : 0;
+        // Per month and EUI use the days these readings cover, the same basis the
+        // status is graded on.
+        const spanDays = getReadingSpanDays(buildingReadings);
+        const isAnnualized = spanDays >= MIN_DAYS_TO_ANNUALIZE;
+        const buildingMonthly = isAnnualized
+          ? buildingTotal / (spanDays / DAYS_PER_MONTH)
+          : null;
 
         const buildingHighest = buildingReadings.length
           ? Math.max(...buildingReadings.map((reading) => reading.differential))
@@ -891,7 +883,9 @@ const Reports = () => {
           readingCount: buildingReadings.length,
           totalConsumption: buildingTotal,
           estimatedCost: buildingTotal * rate,
-          averageReading: buildingAverage,
+          monthlyConsumption: buildingMonthly,
+          eui: annualizeEui(computeEui(buildingTotal, building.floor_area), spanDays),
+          isAnnualized,
           highestReading: buildingHighest,
           verifiedCount: buildingVerified,
           pendingCount: buildingPending,
@@ -901,7 +895,7 @@ const Reports = () => {
           status: getEnergyStatus(
             buildingTotal,
             building.floor_area,
-            getReadingSpanDays(buildingReadings)
+            spanDays
           ),
         };
       })
@@ -1001,9 +995,9 @@ const Reports = () => {
   const generatedReport = {
     type: reportType,
     building: buildingFilter,
-    period: periodFilter,
+    period: periodLabel,
     totalConsumption,
-    averageReading,
+    monthlyConsumption,
     highestReading,
     verifiedCount,
     pendingCount,
@@ -1013,7 +1007,7 @@ const Reports = () => {
   const reportCards = [
     {
       title: "Monthly Building Report",
-      description: "Summarizes total, average, and highest building energy use.",
+      description: "Summarizes total, monthly, and highest building energy use.",
       icon: FileText,
       action: () => setReportType("Monthly Building Report"),
     },
@@ -1044,7 +1038,8 @@ const Reports = () => {
       "Readings",
       "Total Consumption (kWh)",
       "Estimated Cost (PHP)",
-      "Average Reading",
+      "kWh per Month",
+      "EUI (kWh/m²/yr)",
       "Highest Reading",
       "Verified",
       "Needs Review",
@@ -1066,7 +1061,8 @@ const Reports = () => {
       row.readingCount,
       row.totalConsumption,
       Math.round(row.estimatedCost),
-      row.averageReading,
+      row.monthlyConsumption === null ? "" : Math.round(row.monthlyConsumption),
+      row.status === "No Data" ? "" : Math.round(row.eui * 100) / 100,
       row.highestReading,
       row.verifiedCount,
       row.pendingCount,
@@ -1201,7 +1197,7 @@ const Reports = () => {
             onChange={(event) => setPeriodFilter(event.target.value)}
             className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
           >
-            {periodOptions.map((period) => (
+            {PERIOD_OPTIONS.map((period) => (
               <option key={period} value={period}>
                 {period}
               </option>
@@ -1219,6 +1215,45 @@ const Reports = () => {
             />
           </div>
         </div>
+
+        {periodFilter === "Custom Range" && (
+          <div className="mt-3 flex flex-wrap items-end gap-3">
+            <label className="flex min-w-[170px] flex-1 flex-col gap-1 text-xs font-medium text-slate-500 sm:flex-none">
+              From
+              <input
+                type="date"
+                value={customFrom}
+                max={customTo || undefined}
+                onChange={(event) => setCustomFrom(event.target.value)}
+                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              />
+            </label>
+
+            <label className="flex min-w-[170px] flex-1 flex-col gap-1 text-xs font-medium text-slate-500 sm:flex-none">
+              To
+              <input
+                type="date"
+                value={customTo}
+                min={customFrom || undefined}
+                onChange={(event) => setCustomTo(event.target.value)}
+                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              />
+            </label>
+
+            {isCustomRangeInvalid ? (
+              <p className="pb-3 text-xs font-medium text-red-600">
+                The start date is after the end date.
+              </p>
+            ) : (
+              !customFrom &&
+              !customTo && (
+                <p className="pb-3 text-xs text-slate-400">
+                  Pick a start date, an end date, or both.
+                </p>
+              )
+            )}
+          </div>
+        )}
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 print:hidden">
@@ -1230,11 +1265,15 @@ const Reports = () => {
         />
 
         <StatCard
-          title="Average Reading"
-          value={formatNumber(averageReading)}
+          title="Per Month"
+          value={monthlyConsumption === null ? "—" : formatNumber(monthlyConsumption)}
           icon={FileSpreadsheet}
           tone="blue"
-          description="Average kWh per record"
+          description={
+            monthlyConsumption === null
+              ? `Readings cover under ${MIN_DAYS_TO_ANNUALIZE} days`
+              : "kWh in an average month"
+          }
         />
 
         <StatCard
@@ -1358,7 +1397,7 @@ const Reports = () => {
               Generated Report Preview
             </h2>
             <p className="mt-1 text-sm font-normal text-slate-500">
-              {reportType} • {buildingFilter} • {periodFilter}
+              {reportType} • {buildingFilter} • {periodLabel}
             </p>
           </div>
 
@@ -1390,8 +1429,8 @@ const Reports = () => {
               <div>Readings</div>
               <div>Total</div>
               <div>Est. Cost</div>
-              <div>Average</div>
-              <div>Highest</div>
+              <div>Per Month</div>
+              <div>EUI</div>
               <div>OCR Avg.</div>
               <div>Status</div>
             </div>
@@ -1454,11 +1493,16 @@ const Reports = () => {
                     </div>
 
                     <div className="font-medium text-slate-600">
-                      {formatNumber(row.averageReading)} kWh
+                      {row.monthlyConsumption === null ? "—" : `${formatNumber(row.monthlyConsumption)} kWh`}
                     </div>
 
-                    <div className="font-medium text-slate-600">
-                      {formatNumber(row.highestReading)} kWh
+                    <div className="font-semibold text-slate-950">
+                      {formatReportEui(row)}
+                      {row.status !== "No Data" && (
+                        <span className="ml-1 text-[10px] font-normal text-slate-400">
+                          {row.isAnnualized ? "kWh/m²/yr" : "*"}
+                        </span>
+                      )}
                     </div>
 
                     <div>
@@ -1602,10 +1646,10 @@ const Reports = () => {
       <PrintTemplate
         reportType={reportType}
         buildingFilter={buildingFilter}
-        periodFilter={periodFilter}
+        periodLabel={periodLabel}
         totalConsumption={totalConsumption}
         totalCost={totalCost}
-        averageReading={averageReading}
+        monthlyConsumption={monthlyConsumption}
         highestReading={highestReading}
         verifiedCount={verifiedCount}
         pendingCount={pendingCount}
