@@ -1,31 +1,41 @@
-import React, { useEffect, useMemo, useState } from "react";
-import Dashboard from "./pages/Dashboard";
-import BuildingMap from "./pages/BuildingMap";
-import BuildingsList from "./pages/BuildingsList";
-import MetersPage from "./pages/MetersPage";
-import UploadOCR from "./pages/UploadOCR";
-import Reports from "./pages/Reports";
-import Analytics from "./pages/Analytics";
-import AdminUsers from "./pages/AdminUsers";
-import SettingsPage from "./pages/SettingsPage";
-import ProfilePage from "./pages/ProfilePage";
-import SignIn from "./pages/auth/SignIn";
-import SignUpRole from "./pages/auth/SignUpRole";
-import ForgotPassword from "./pages/auth/ForgotPassword";
+import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
+
+// Pages are split per route. They previously all sat in one 1.07 MB chunk that the
+// browser had to download in full before it could even render the sign-in form,
+// which matters on a phone over campus wifi. Each page and its heavy dependencies
+// (Leaflet for the map, Recharts for the charts) now load when first opened.
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const BuildingMap = lazy(() => import("./pages/BuildingMap"));
+const BuildingsList = lazy(() => import("./pages/BuildingsList"));
+const MetersPage = lazy(() => import("./pages/MetersPage"));
+const UploadOCR = lazy(() => import("./pages/UploadOCR"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const AdminUsers = lazy(() => import("./pages/AdminUsers"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const ProfilePage = lazy(() => import("./pages/ProfilePage"));
+const SignIn = lazy(() => import("./pages/auth/SignIn"));
+const SignUpRole = lazy(() => import("./pages/auth/SignUpRole"));
+const ForgotPassword = lazy(() => import("./pages/auth/ForgotPassword"));
 import logo from "./assets/logo/EnerSight Logo.png";
 import ConfirmationModal from "./components/ConfirmationModal";
+import {
+  SESSION_EXPIRED_EVENT,
+  clearSavedLogin,
+  getSavedUser,
+  getToken,
+  resetSessionExpiryGuard,
+} from "./utils/session";
 
 import {
   AlertTriangle,
   BarChart3,
-  Bell,
   Building2,
-  CheckCircle2,
   FileText,
   Gauge,
   LayoutDashboard,
   LogOut,
-  Map,
+  Map as MapIcon,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -37,20 +47,38 @@ import {
   X,
 } from "lucide-react";
 
+// Shown while a lazily-loaded page chunk downloads. Deliberately quiet: on a fast
+// connection it flashes for a few milliseconds, so a spinner would be noisier than
+// the wait it describes.
+function PageFallback() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex min-h-[60vh] items-center justify-center text-sm font-medium text-slate-400"
+    >
+      Loading...
+    </div>
+  );
+}
+
 const SYSTEM_NAME = "EnerSight";
 const SYSTEM_TAGLINE = "See energy clearly, manage buildings wisely.";
 
-const roles = {
-  Admin:
-    "Can manage users, buildings, meters, readings, reports, analytics, map, profile, and settings.",
-  Manager:
-    "Can view dashboard, buildings, meters, GIS map, reports, and analytics.",
-  Staff: "Can add meter readings, view GIS map, and view profile information.",
-};
+// Sidebar section order. A group disappears entirely when the signed-in role
+// can't reach any of its pages (Staff never sees Records or Administration).
+const NAV_GROUP_ORDER = [
+  "Overview",
+  "Records",
+  "Insights",
+  "Administration",
+  "Account",
+];
 
 const nav = [
   {
     id: "dashboard",
+    group: "Overview",
     label: "Dashboard",
     hint: "Home overview",
     icon: LayoutDashboard,
@@ -58,13 +86,15 @@ const nav = [
   },
   {
     id: "map",
+    group: "Overview",
     label: "GIS Map",
     hint: "Building map",
-    icon: Map,
+    icon: MapIcon,
     roles: ["Admin", "Manager", "Staff"],
   },
   {
     id: "buildings",
+    group: "Records",
     label: "Buildings",
     hint: "Building records",
     icon: Building2,
@@ -72,6 +102,7 @@ const nav = [
   },
   {
     id: "meters",
+    group: "Records",
     label: "Meters",
     hint: "Meter records",
     icon: Gauge,
@@ -79,6 +110,7 @@ const nav = [
   },
   {
     id: "ocr",
+    group: "Records",
     label: "Add Meter Reading",
     hint: "Save readings",
     icon: Upload,
@@ -86,6 +118,7 @@ const nav = [
   },
   {
     id: "reports",
+    group: "Insights",
     label: "Reports",
     hint: "View reports",
     icon: FileText,
@@ -93,6 +126,7 @@ const nav = [
   },
   {
     id: "analytics",
+    group: "Insights",
     label: "Analytics",
     hint: "Trends",
     icon: BarChart3,
@@ -100,6 +134,7 @@ const nav = [
   },
   {
     id: "users",
+    group: "Administration",
     label: "Users",
     hint: "Manage users",
     icon: UserCog,
@@ -107,6 +142,7 @@ const nav = [
   },
   {
     id: "profile",
+    group: "Account",
     label: "Profile",
     hint: "My account",
     icon: User,
@@ -114,10 +150,15 @@ const nav = [
   },
   {
     id: "settings",
+    // Open to every role: this is where a user changes their own name and
+    // password, and PUT /auth/me has always allowed that for anyone. While the
+    // page was Admin-only, Managers and Staff had no way to change their own
+    // password at all. The system-wide electricity rate inside it is still gated.
+    group: "Account",
     label: "Settings",
-    hint: "System setup",
+    hint: "Account and system setup",
     icon: Settings,
-    roles: ["Admin"],
+    roles: ["Admin", "Manager", "Staff"],
   },
 ];
 
@@ -127,12 +168,12 @@ const pageDescriptions = {
   buildings:
     "View and manage building details, type, floor area, and map coordinates.",
   meters: "View and manage meters connected to each building.",
-  ocr: "Upload and crop a meter photo — Gemini Vision reads the display automatically.",
+  ocr: "Upload and crop a meter photo — the reading is detected automatically.",
   reports: "Generate and view saved energy records and report summaries.",
   analytics: "Analyze trends, compare buildings, and review OCR quality.",
   users: "Add and manage people who can use the system.",
   profile: "View your account information and role permissions.",
-  settings: "View basic system configuration and prototype notes.",
+  settings: "Update your account details and password. Admins also set the electricity rate.",
 };
 
 const roleHomePage = {
@@ -141,29 +182,8 @@ const roleHomePage = {
   Staff: "dashboard",
 };
 
-function clearSavedLogin() {
-  localStorage.removeItem("token");
-  localStorage.removeItem("user");
-  localStorage.removeItem("role");
-  localStorage.removeItem("fullName");
-}
-
-function getSavedUser() {
-  const savedUser = localStorage.getItem("user");
-
-  if (!savedUser) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(savedUser);
-  } catch {
-    return null;
-  }
-}
-
 function getInitialAuthState() {
-  const savedToken = localStorage.getItem("token");
+  const savedToken = getToken();
   const savedUser = getSavedUser();
 
   if (!savedToken || !savedUser) {
@@ -219,11 +239,35 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 1024);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [authNotice, setAuthNotice] = useState("");
 
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth < 1024);
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
+  }, []);
+
+  // apiFetch raises this when the backend rejects our token, which in practice means
+  // it expired mid-session. Signing the user out here is the only way to recover:
+  // pages have no way to reach this state on their own, so before this they simply
+  // kept failing while the user still appeared to be logged in.
+  useEffect(() => {
+    function handleSessionExpiry() {
+      clearSavedLogin();
+
+      setUser(null);
+      setRole("Staff");
+      setIsAuthenticated(false);
+      setCurrentPage("signIn");
+      setHeaderNotice("");
+      setSidebarOpen(false);
+      setAuthNotice("Your session has expired. Please sign in again.");
+    }
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpiry);
+
+    return () =>
+      window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpiry);
   }, []);
 
   useEffect(() => {
@@ -240,6 +284,15 @@ function App() {
   const navItems = useMemo(() => {
     return nav.filter((item) => item.roles.includes(role));
   }, [role]);
+
+  // Grouped view of the same items. navItems stays flat because search, the
+  // active-page lookup and the mobile bottom bar all index into it directly.
+  const navGroups = useMemo(() => {
+    return NAV_GROUP_ORDER.map((title) => ({
+      title,
+      items: navItems.filter((item) => item.group === title),
+    })).filter((group) => group.items.length > 0);
+  }, [navItems]);
 
   const active = navItems.find((item) => item.id === currentPage) || navItems[0];
 
@@ -258,8 +311,6 @@ function App() {
       );
     });
   }, [navItems, searchQuery]);
-
-  const visibleNotice = headerNotice || roles[role] || "Role access enabled.";
 
   function canAccess(pageId) {
     return nav.some((item) => item.id === pageId && item.roles.includes(role));
@@ -296,21 +347,27 @@ function App() {
 
     const userRole = loggedInUser.role || "Staff";
 
+    // Arm the expiry announcement again for this new session.
+    resetSessionExpiryGuard();
+
     setUser(loggedInUser);
     setRole(userRole);
     setIsAuthenticated(true);
     setCurrentPage("dashboard");
     setHeaderNotice("");
+    setAuthNotice("");
   }
 
   function logout() {
     clearSavedLogin();
+    resetSessionExpiryGuard();
 
     setUser(null);
     setRole("Staff");
     setIsAuthenticated(false);
     setCurrentPage("signIn");
     setHeaderNotice("");
+    setAuthNotice("");
   }
 
   function goToSignUp() {
@@ -331,12 +388,6 @@ function App() {
     setCurrentPage("signIn");
   }
 
-  function handleNotificationClick() {
-    setHeaderNotice(
-      "Notification center is prepared for alerts. Current alerts are shown in Dashboard, Analytics, and GIS Map."
-    );
-  }
-
   function renderPage() {
     const hasAccess = canAccess(currentPage);
 
@@ -352,12 +403,15 @@ function App() {
       return <BuildingMap />;
     }
 
+    // Both pages are open to Manager and Admin, but deletion is Admin-only on the
+    // backend. Passing the role lets them hide the actions a Manager would only
+    // get a 403 from.
     if (currentPage === "buildings") {
-      return <BuildingsList />;
+      return <BuildingsList role={role} />;
     }
 
     if (currentPage === "meters") {
-      return <MetersPage />;
+      return <MetersPage role={role} />;
     }
 
     if (currentPage === "ocr") {
@@ -377,31 +431,39 @@ function App() {
     }
 
     if (currentPage === "profile") {
-      return <ProfilePage user={user} role={role} onLogout={logout} />;
+      return (
+        <ProfilePage
+          user={user}
+          role={role}
+          onLogout={logout}
+          setCurrentPage={goToPage}
+        />
+      );
     }
 
     if (currentPage === "settings") {
-      return <SettingsPage />;
+      return <SettingsPage role={role} />;
     }
 
     return <Dashboard role={role} setCurrentPage={goToPage} />;
   }
 
   if (!isAuthenticated) {
-    if (currentPage === "signUp") {
-      return <SignUpRole onBack={goToLogin} />;
-    }
-
-    if (currentPage === "forgotPassword") {
-      return <ForgotPassword onBack={() => setCurrentPage("signIn")} />;
-    }
-
     return (
-      <SignIn
-        onLogin={login}
-        onSignUp={goToSignUp}
-        onForgot={() => setCurrentPage("forgotPassword")}
-      />
+      <Suspense fallback={<PageFallback />}>
+        {currentPage === "signUp" ? (
+          <SignUpRole onBack={goToLogin} />
+        ) : currentPage === "forgotPassword" ? (
+          <ForgotPassword onBack={() => setCurrentPage("signIn")} />
+        ) : (
+          <SignIn
+            onLogin={login}
+            onSignUp={goToSignUp}
+            onForgot={() => setCurrentPage("forgotPassword")}
+            notice={authNotice}
+          />
+        )}
+      </Suspense>
     );
   }
 
@@ -425,7 +487,7 @@ function App() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-[10002] flex flex-col border-r border-white/10 bg-slate-950 px-4 py-5 text-white shadow-2xl shadow-slate-950/30 lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-[10002] flex flex-col border-r border-white/10 bg-slate-950 px-4 py-5 text-white shadow-xl lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         } ${sidebarCollapsed ? "lg:w-[68px] lg:px-2" : "w-[296px]"}`}
         style={{ transition: "width 300ms ease-in-out, transform 300ms ease-in-out", willChange: "transform" }}
@@ -441,7 +503,7 @@ function App() {
           {/* Logo row */}
           <div className="flex min-w-0 items-center gap-3">
             <div
-              className={`grid shrink-0 place-items-center overflow-hidden rounded-2xl bg-white shadow-lg shadow-emerald-950/30 transition-[width,height] duration-300 ease-in-out ${
+              className={`grid shrink-0 place-items-center overflow-hidden rounded-2xl bg-white shadow-md transition-[width,height] duration-300 ease-in-out ${
                 sidebarCollapsed ? "h-14 w-14 lg:h-10 lg:w-10" : "h-14 w-14"
               }`}
             >
@@ -459,10 +521,10 @@ function App() {
                   : "max-w-[185px] opacity-100"
               }`}
             >
-              <h1 className="truncate text-xl font-black leading-none text-white">
+              <h1 className="truncate text-xl font-bold leading-none text-white">
                 {SYSTEM_NAME}
               </h1>
-              <p className="mt-1 truncate text-[10px] font-black uppercase leading-4 tracking-[0.13em] text-lime-300">
+              <p className="mt-1 truncate text-[10px] font-semibold uppercase leading-4 tracking-[0.13em] text-lime-300">
                 {SYSTEM_TAGLINE}
               </p>
             </div>
@@ -492,54 +554,63 @@ function App() {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1.5 overflow-y-auto pr-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const activeItem = currentPage === item.id;
+        <nav className="flex-1 space-y-5 overflow-y-auto pr-1">
+          {navGroups.map((group) => (
+            <div key={group.title} className="space-y-1">
+              {sidebarCollapsed ? (
+                <div className="mx-auto h-px w-6 bg-white/10 lg:my-2" />
+              ) : (
+                <p className="px-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                  {group.title}
+                </p>
+              )}
 
-            return (
-              <button
-                key={item.id}
-                type="button"
-                title={sidebarCollapsed ? item.label : undefined}
-                onClick={() => goToPage(item.id)}
-                className={`group flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${
-                  activeItem
-                    ? "bg-emerald-700 text-white shadow-lg shadow-emerald-950/30"
-                    : "text-slate-300 hover:bg-white/10 hover:text-white"
-                } ${sidebarCollapsed ? "lg:justify-center lg:px-2" : ""}`}
-              >
-                <Icon
-                  size={19}
-                  className={`shrink-0 ${activeItem ? "text-lime-300" : "text-slate-400"}`}
-                />
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const activeItem = currentPage === item.id;
 
-                <span
-                  className={`min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
-                    sidebarCollapsed
-                      ? "max-w-0 opacity-0 lg:hidden"
-                      : "max-w-[200px] opacity-100"
-                  }`}
-                >
-                  <span className="block whitespace-nowrap text-sm font-black">{item.label}</span>
-                  <span
-                    className={`block whitespace-nowrap text-[11px] font-bold ${
-                      activeItem ? "text-emerald-50" : "text-slate-500"
-                    }`}
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    // The hint used to be a second line under every label; it
+                    // mostly restated the label, so it lives in the tooltip now.
+                    title={sidebarCollapsed ? item.label : item.hint}
+                    onClick={() => goToPage(item.id)}
+                    className={`group flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-left transition ${
+                      activeItem
+                        ? "bg-emerald-700 text-white shadow-sm"
+                        : "text-slate-300 hover:bg-white/10 hover:text-white"
+                    } ${sidebarCollapsed ? "lg:justify-center lg:px-2" : ""}`}
                   >
-                    {item.hint}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+                    <Icon
+                      size={19}
+                      className={`shrink-0 ${
+                        activeItem ? "text-lime-300" : "text-slate-400"
+                      }`}
+                    />
+
+                    <span
+                      className={`min-w-0 overflow-hidden whitespace-nowrap text-sm font-medium transition-[max-width,opacity] duration-300 ease-in-out ${
+                        sidebarCollapsed
+                          ? "max-w-0 opacity-0 lg:hidden"
+                          : "max-w-[200px] opacity-100"
+                      }`}
+                    >
+                      {item.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
 
         <button
           type="button"
           title={sidebarCollapsed ? "Sign out" : undefined}
           onClick={() => setShowLogoutModal(true)}
-          className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-500 ${
+          className={`mt-4 flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-red-50 hover:text-red-500 ${
             sidebarCollapsed ? "lg:justify-center lg:px-2" : ""
           }`}
         >
@@ -572,19 +643,11 @@ function App() {
         style={{ transition: "padding-left 300ms ease-in-out" }}
       >
         <header className="sticky top-0 z-[9999] border-b border-slate-200/80 bg-white">
-          <div className="flex min-h-20 items-center justify-between gap-4 px-5 py-4 md:px-8">
+          <div className="flex min-h-16 items-center justify-between gap-4 px-5 py-3 md:px-8">
             <div className="ml-14 min-w-0 lg:ml-0">
-              <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
-                {active?.hint || "Home"}
-              </p>
-
-              <h2 className="truncate text-2xl font-black tracking-tight text-slate-950">
+              <h2 className="truncate text-sm font-semibold text-slate-700">
                 {active?.label || "Dashboard"}
               </h2>
-
-              <p className="hidden text-sm font-bold text-slate-500 md:block">
-                {pageDescriptions[currentPage]}
-              </p>
             </div>
 
             <div className="relative hidden max-w-md flex-1 xl:block">
@@ -600,9 +663,9 @@ function App() {
               </div>
 
               {searchQuery.trim() && (
-                <div className="absolute left-0 right-0 top-[58px] z-[10000] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-950/10">
+                <div className="absolute left-0 right-0 top-[58px] z-[10000] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
                   {searchablePages.length === 0 ? (
-                    <div className="p-4 text-sm font-black text-slate-400">
+                    <div className="p-4 text-sm font-medium text-slate-400">
                       No page found for your role.
                     </div>
                   ) : (
@@ -621,7 +684,7 @@ function App() {
                           </div>
 
                           <span>
-                            <span className="block text-sm font-black text-slate-950">
+                            <span className="block text-sm font-semibold text-slate-950">
                               {item.label}
                             </span>
                             <span className="block text-xs font-bold text-slate-500">
@@ -636,27 +699,22 @@ function App() {
               )}
             </div>
 
+            {/* The notification bell was removed. Clicking it only produced a
+                banner saying a notification centre was "prepared for alerts", and
+                its unread dot was a hardcoded red circle that never changed.
+                Alerts live on the Dashboard, Analytics and GIS Map instead. */}
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleNotificationClick}
-                className="relative rounded-2xl border border-slate-200 bg-white p-3 text-slate-500 shadow-sm transition hover:text-emerald-700"
-              >
-                <Bell size={20} />
-                <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white" />
-              </button>
-
               <button
                 type="button"
                 onClick={() => goToPage("profile")}
                 className="hidden items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:bg-slate-50 md:flex"
               >
-                <div className="grid h-9 w-9 place-items-center rounded-full bg-emerald-100 text-sm font-black text-emerald-700">
+                <div className="grid h-9 w-9 place-items-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
                   {getInitials(user?.full_name, user?.username)}
                 </div>
 
                 <div className="text-left">
-                  <p className="max-w-[140px] truncate text-sm font-black text-slate-950">
+                  <p className="max-w-[140px] truncate text-sm font-semibold text-slate-950">
                     {user?.full_name || "User"}
                   </p>
                   <p className="text-xs font-bold text-emerald-700">{role}</p>
@@ -665,28 +723,23 @@ function App() {
             </div>
           </div>
 
-          {visibleNotice && (
-            <div className="border-t border-slate-100 bg-slate-50 px-5 py-2 md:px-8">
-              <div className="flex items-start gap-2 text-xs font-bold text-slate-500">
-                {headerNotice ? (
-                  <AlertTriangle
-                    size={15}
-                    className="mt-0.5 shrink-0 text-amber-600"
-                  />
-                ) : (
-                  <CheckCircle2
-                    size={15}
-                    className="mt-0.5 shrink-0 text-emerald-700"
-                  />
-                )}
+          {headerNotice && (
+            <div className="border-t border-amber-100 bg-amber-50 px-5 py-2 md:px-8">
+              <div className="flex items-start gap-2 text-xs font-medium text-amber-800">
+                <AlertTriangle
+                  size={15}
+                  className="mt-0.5 shrink-0 text-amber-600"
+                />
 
-                <span>{visibleNotice}</span>
+                <span>{headerNotice}</span>
               </div>
             </div>
           )}
         </header>
 
-        <div className={`p-5 md:p-8 ${isMobile ? "pb-24" : ""}`}>{renderPage()}</div>
+        <div className={`p-5 md:p-8 ${isMobile ? "pb-24" : ""}`}>
+          <Suspense fallback={<PageFallback />}>{renderPage()}</Suspense>
+        </div>
       </main>
 
       {/* ── Mobile Bottom Navigation ── */}
@@ -709,7 +762,7 @@ function App() {
                     <span className="absolute top-0 left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-emerald-700" />
                   )}
                   <Icon size={20} strokeWidth={isActive ? 2.5 : 1.8} />
-                  <span className={`text-[10px] font-black leading-none ${isActive ? "text-emerald-700" : "text-slate-400"}`}>
+                  <span className={`text-[10px] font-semibold leading-none ${isActive ? "text-emerald-700" : "text-slate-400"}`}>
                     {item.label === "Add Meter Reading" ? "Capture" : item.label}
                   </span>
                 </button>
@@ -723,7 +776,7 @@ function App() {
               className="relative flex flex-1 flex-col items-center justify-center gap-1 py-2.5 text-slate-400 transition-all duration-200"
             >
               <Menu size={20} strokeWidth={1.8} />
-              <span className="text-[10px] font-black leading-none text-slate-400">More</span>
+              <span className="text-[10px] font-semibold leading-none text-slate-400">More</span>
             </button>
           </div>
         </nav>

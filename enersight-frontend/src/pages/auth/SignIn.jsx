@@ -13,20 +13,14 @@ import {
 } from "lucide-react";
 import AuthShell from "../../components/ui/AuthShell";
 import { FormField } from "../../components/ui/EnergyUI";
+import { clearSavedLogin, resetSessionExpiryGuard } from "../../utils/session";
 
-const SignIn = ({ onLogin, onSignUp, onForgot }) => {
+const SignIn = ({ onLogin, onSignUp, onForgot, notice = "" }) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-
-  function clearSavedLogin() {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    localStorage.removeItem("role");
-    localStorage.removeItem("fullName");
-  }
 
   async function handleLogin(event) {
     event.preventDefault();
@@ -42,24 +36,33 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          username: username,
+          username: username.trim(),
           password: password,
         }),
       });
 
-      const data = await response.json();
+      // A proxy error or a crash returns HTML, not JSON. Parsing that throws and the
+      // real status would be lost in the catch below as "cannot connect to server".
+      let data = null;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
 
       if (!response.ok) {
         clearSavedLogin();
-        setErrorMessage(data.detail || "Invalid username or password.");
+        setErrorMessage(
+          data?.detail ||
+            `Sign in failed (${response.status}). Please try again.`
+        );
         return;
       }
 
-      if (data.user.status !== "Active") {
-        clearSavedLogin();
-        setErrorMessage("Your account is not approved yet.");
-        return;
-      }
+      // The backend now rejects Pending, Rejected and Inactive accounts at login
+      // with a specific reason, so !response.ok above already covers those.
+      resetSessionExpiryGuard();
 
       localStorage.setItem("token", data.access_token);
       localStorage.setItem("user", JSON.stringify(data.user));
@@ -84,9 +87,24 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
       subtitle="Sign in to continue to your EnerSight dashboard."
     >
       {errorMessage && (
-        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-black text-red-700">
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"
+        >
           <AlertTriangle size={17} className="mt-0.5 shrink-0" />
           <span>{errorMessage}</span>
+        </div>
+      )}
+
+      {/* Set by App when a token expires mid-session, so the user is told why they
+          were signed out instead of silently landing back on this screen. */}
+      {!errorMessage && notice && (
+        <div
+          role="status"
+          className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800"
+        >
+          <AlertTriangle size={17} className="mt-0.5 shrink-0" />
+          <span>{notice}</span>
         </div>
       )}
 
@@ -102,7 +120,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="Enter username"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
           </div>
         </FormField>
@@ -119,7 +137,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter password"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
 
             <button
@@ -137,7 +155,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
           <button
             type="button"
             onClick={onForgot}
-            className="inline-flex items-center gap-2 text-sm font-black text-emerald-700 hover:text-emerald-800"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800"
           >
             <KeyRound size={16} />
             Forgot password?
@@ -147,7 +165,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
         <button
           type="submit"
           disabled={isLoading}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading ? (
             <>
@@ -166,7 +184,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
       <button
         type="button"
         onClick={onSignUp}
-        className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:border-emerald-100 hover:bg-emerald-50 hover:text-emerald-700"
+        className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-emerald-100 hover:bg-emerald-50 hover:text-emerald-700"
       >
         <UserPlus size={18} />
         Create account

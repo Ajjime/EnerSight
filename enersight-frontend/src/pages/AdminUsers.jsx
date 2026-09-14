@@ -20,6 +20,8 @@ import {
 import PageHeader from "../components/PageHeader";
 import ConfirmationModal from "../components/ConfirmationModal";
 import HeaderActionButton from "../components/HeaderActionButton";
+import EmptyState from "../components/EmptyState";
+import SkeletonRows from "../components/SkeletonRows";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import ToastMessage from "../components/ToastMessage";
 
@@ -27,9 +29,10 @@ import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 const AUTO_REFRESH_MS = 60000;
 
+// No email field: the User model has no email column (see models.py), so anything
+// collected here was validated, sent, and silently dropped by Pydantic.
 const emptyForm = {
   username: "",
-  email: "",
   full_name: "",
   password: "",
   role: "Staff",
@@ -37,13 +40,14 @@ const emptyForm = {
 };
 
 const roleOptions = ["Admin", "Manager", "Staff"];
-const statusOptions = ["Active", "Inactive", "Pending"];
+// "Rejected" is reachable now that Reject marks the account instead of deleting it,
+// so it belongs in the filter and the editor. Mirrors VALID_STATUSES in users.py.
+const statusOptions = ["Active", "Inactive", "Pending", "Rejected"];
 
 function normalizeUser(user) {
   return {
     user_id: user.user_id ?? user.id,
     username: user.username || "",
-    email: user.email || "",
     full_name: user.full_name || user.name || "",
     role: user.role || "Staff",
     status: user.status || "Active",
@@ -81,14 +85,14 @@ function getStatusStyle(status) {
 function Field({ label, children, helper }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
         {label}
       </span>
 
       {children}
 
       {helper && (
-        <p className="mt-2 text-xs font-bold leading-5 text-slate-500">
+        <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
           {helper}
         </p>
       )}
@@ -106,14 +110,14 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
 
   return (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border border-slate-200 bg-white shadow-2xl shadow-slate-950/20">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white p-6">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
               User Account
             </p>
 
-            <h2 className="mt-2 text-2xl font-black text-slate-950">
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">
               {modal.mode === "add"
                 ? "Add User"
                 : modal.mode === "edit"
@@ -121,7 +125,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                 : "User Details"}
             </h2>
 
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Manage role access and account status.
             </p>
           </div>
@@ -145,20 +149,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                   setForm({ ...form, username: event.target.value })
                 }
                 placeholder="Example: admin01"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
-              />
-            </Field>
-
-            <Field label="Email">
-              <input
-                disabled={isView}
-                type="email"
-                value={form.email}
-                onChange={(event) =>
-                  setForm({ ...form, email: event.target.value })
-                }
-                placeholder="user@example.com"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </Field>
 
@@ -170,7 +161,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                   setForm({ ...form, full_name: event.target.value })
                 }
                 placeholder="Example: Juan Dela Cruz"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </Field>
 
@@ -188,7 +179,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                   setForm({ ...form, password: event.target.value })
                 }
                 placeholder={isEdit ? "Optional new password" : "Enter password"}
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </Field>
 
@@ -199,7 +190,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                 onChange={(event) =>
                   setForm({ ...form, role: event.target.value })
                 }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 {roleOptions.map((role) => (
                   <option key={role} value={role}>
@@ -216,7 +207,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
                 onChange={(event) =>
                   setForm({ ...form, status: event.target.value })
                 }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 {statusOptions.map((status) => (
                   <option key={status} value={status}>
@@ -227,9 +218,9 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
             </Field>
           </div>
 
-          <div className="mt-6 rounded-[1.5rem] border border-emerald-100 bg-emerald-50 p-5">
-            <p className="text-sm font-black text-emerald-800">Role Guide</p>
-            <p className="mt-1 text-sm font-bold leading-6 text-emerald-700">
+          <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 p-5">
+            <p className="text-sm font-semibold text-emerald-800">Role Guide</p>
+            <p className="mt-1 text-sm font-normal leading-6 text-emerald-700">
               Admin manages users and settings. Manager reviews reports and analytics.
               Staff handles readings and records.
             </p>
@@ -240,7 +231,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             {isView ? "Close" : "Cancel"}
           </button>
@@ -250,7 +241,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
               type="button"
               disabled={isSaving}
               onClick={onSave}
-              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? "Saving..." : "Save User"}
             </button>
@@ -260,6 +251,10 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
     </div>
   );
 }
+
+// Kept next to each real row's grid-cols-[...] class so the two stay in step.
+const PENDING_ROW_COLUMNS = "90px 1.1fr 1.2fr 1.4fr 130px 210px";
+const USER_ROW_COLUMNS = "90px 1.1fr 1.2fr 1.4fr 130px 130px 170px";
 
 const AdminUsers = () => {
   const [users, setUsers] = useState([]);
@@ -347,7 +342,6 @@ const AdminUsers = () => {
       const matchesSearch =
         String(user.user_id).includes(searchValue) ||
         user.username.toLowerCase().includes(searchValue) ||
-        user.email.toLowerCase().includes(searchValue) ||
         user.full_name.toLowerCase().includes(searchValue) ||
         user.role.toLowerCase().includes(searchValue) ||
         user.status.toLowerCase().includes(searchValue);
@@ -359,6 +353,19 @@ const AdminUsers = () => {
       return matchesSearch && matchesRole && matchesStatus;
     });
   }, [users, query, roleFilter, statusFilter]);
+
+  // Tells the two empty cases apart: no accounts at all vs. filters hiding
+  // everything. They need opposite calls to action.
+  const hasActiveFilters =
+    query.trim() !== "" ||
+    roleFilter !== "All Roles" ||
+    statusFilter !== "All Status";
+
+  function clearFilters() {
+    setQuery("");
+    setRoleFilter("All Roles");
+    setStatusFilter("All Status");
+  }
 
   const totalUsers = users.length;
   const adminUsers = users.filter((user) => user.role === "Admin").length;
@@ -378,17 +385,20 @@ const AdminUsers = () => {
 
   function openEditModal(user) {
     setForm({ ...normalizeUser(user), password: "" });
-    setModal({ mode: "edit", userId: user.user_id });
+    setModal({
+      mode: "edit",
+      userId: user.user_id,
+      // Kept so a role or status change can be confirmed before it is sent. A
+      // role change used to apply with one click and no warning, which is how an
+      // Admin could demote themselves out of the system.
+      originalRole: user.role,
+      originalStatus: user.status,
+    });
   }
 
   function validateForm() {
     if (!form.username.trim()) {
       showToast("Please enter the username.", "error");
-      return false;
-    }
-
-    if (!form.email.trim()) {
-      showToast("Please enter the email address.", "error");
       return false;
     }
 
@@ -408,7 +418,6 @@ const AdminUsers = () => {
   function buildPayload() {
     const payload = {
       username: form.username.trim(),
-      email: form.email.trim(),
       full_name: form.full_name.trim(),
       role: form.role,
       status: form.status,
@@ -426,6 +435,43 @@ const AdminUsers = () => {
       return;
     }
 
+    // A role or status change alters who can do what, so it gets a confirmation
+    // step rather than applying silently on Save.
+    if (modal?.mode === "edit") {
+      const roleChanged = form.role !== modal.originalRole;
+      const statusChanged = form.status !== modal.originalStatus;
+
+      if (roleChanged || statusChanged) {
+        const changes = [];
+
+        if (roleChanged) {
+          changes.push(`role from ${modal.originalRole} to ${form.role}`);
+        }
+
+        if (statusChanged) {
+          changes.push(`status from ${modal.originalStatus} to ${form.status}`);
+        }
+
+        setConfirmation({
+          type: "privilegeChange",
+          title: "Change this account's access?",
+          message: `This will change ${form.username}'s ${changes.join(" and ")}.`,
+          note:
+            form.status !== "Active"
+              ? "The user will not be able to sign in until the account is Active again."
+              : "The user's permissions take effect the next time they sign in.",
+          confirmText: "Apply Change",
+          variant: "warning",
+        });
+
+        return;
+      }
+    }
+
+    await performSave();
+  }
+
+  async function performSave() {
     setIsSaving(true);
 
     try {
@@ -485,8 +531,8 @@ const AdminUsers = () => {
       type: "rejectUser",
       user,
       title: "Reject account request?",
-      message: `This will reject "${user.username}" and remove the pending account request.`,
-      note: "This action cannot be automatically undone.",
+      message: `This will mark "${user.username}" as Rejected. They will not be able to sign in.`,
+      note: "The account is kept for your records. You can approve it later if this was a mistake.",
       confirmText: "Reject Request",
       variant: "danger",
     });
@@ -504,39 +550,50 @@ const AdminUsers = () => {
     });
   }
 
+  // Approve and reject both use their dedicated endpoints now. Approve used to
+  // re-send the whole user object through PUT /users/{id}, which meant it also
+  // pushed the phantom `email` field, and reject deleted the account outright.
+  async function setUserStatus(user, action, successMessage, failureMessage) {
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/users/${user.user_id}/${action}`,
+        { method: "PUT" }
+      );
+
+      let data = null;
+
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
+
+      if (!response.ok) {
+        showToast(data?.detail || failureMessage, "error");
+        return;
+      }
+
+      showToast(successMessage, "success");
+      setConfirmation(null);
+      await fetchUsers(false);
+    } catch (error) {
+      console.error(`${action} user error:`, error);
+      showToast(
+        "Cannot connect to server. Please make sure FastAPI is running.",
+        "error"
+      );
+    }
+  }
+
   async function approveUser(user) {
     setIsApproving(true);
 
     try {
-      const response = await apiFetch(`${API_BASE_URL}/users/${user.user_id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          username: user.username,
-          email: user.email,
-          full_name: user.full_name,
-          role: user.role,
-          status: "Active",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        showToast(data.detail || "Could not approve account request.", "error");
-        return;
-      }
-
-      showToast(`Account request for ${user.username} approved.`, "success");
-      setConfirmation(null);
-      await fetchUsers(false);
-    } catch (error) {
-      console.error("Approve user error:", error);
-      showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
-        "error"
+      await setUserStatus(
+        user,
+        "approve",
+        `Account request for ${user.username} approved.`,
+        "Could not approve account request."
       );
     } finally {
       setIsApproving(false);
@@ -576,7 +633,15 @@ const AdminUsers = () => {
     setIsRejecting(true);
 
     try {
-      await deleteUser(user, `Account request for ${user.username} rejected.`);
+      // Marks the account Rejected rather than deleting it. Deleting destroyed the
+      // record with no audit trail, and left the "Rejected" status unreachable even
+      // though the UI styles it and the backend accepts it.
+      await setUserStatus(
+        user,
+        "reject",
+        `Account request for ${user.username} rejected.`,
+        "Could not reject account request."
+      );
     } finally {
       setIsRejecting(false);
     }
@@ -593,6 +658,12 @@ const AdminUsers = () => {
       return;
     }
 
+    if (confirmation?.type === "privilegeChange") {
+      setConfirmation(null);
+      performSave();
+      return;
+    }
+
     if (confirmation?.type === "deleteUser") {
       deleteUser(confirmation.user);
     }
@@ -606,7 +677,7 @@ const AdminUsers = () => {
       : isDeleting;
 
   return (
-    <div className="space-y-6 font-[Nunito]">
+    <div className="space-y-6">
       <ToastMessage
         message={toast.message}
         type={toast.type}
@@ -630,11 +701,11 @@ const AdminUsers = () => {
       />
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-slate-500">Total Users</p>
-              <p className="mt-2 text-3xl font-black text-slate-950">
+              <p className="text-sm font-semibold text-slate-500">Total Users</p>
+              <p className="mt-2 text-3xl font-bold text-slate-950">
                 {totalUsers}
               </p>
             </div>
@@ -644,14 +715,14 @@ const AdminUsers = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-slate-400">Registered accounts</p>
+          <p className="text-xs font-normal text-slate-400">Registered accounts</p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-amber-100 bg-amber-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-amber-700">Pending</p>
-              <p className="mt-2 text-3xl font-black text-amber-800">
+              <p className="text-sm font-semibold text-amber-700">Pending</p>
+              <p className="mt-2 text-3xl font-bold text-amber-800">
                 {pendingUsers.length}
               </p>
             </div>
@@ -661,14 +732,14 @@ const AdminUsers = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-amber-700">Needs admin action</p>
+          <p className="text-xs font-normal text-amber-700">Needs admin action</p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-purple-100 bg-purple-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-purple-100 bg-purple-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-purple-700">Admins</p>
-              <p className="mt-2 text-3xl font-black text-purple-800">
+              <p className="text-sm font-semibold text-purple-700">Admins</p>
+              <p className="mt-2 text-3xl font-bold text-purple-800">
                 {adminUsers}
               </p>
             </div>
@@ -678,14 +749,14 @@ const AdminUsers = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-purple-700">Full system access</p>
+          <p className="text-xs font-normal text-purple-700">Full system access</p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-blue-100 bg-blue-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-blue-700">Managers</p>
-              <p className="mt-2 text-3xl font-black text-blue-800">
+              <p className="text-sm font-semibold text-blue-700">Managers</p>
+              <p className="mt-2 text-3xl font-bold text-blue-800">
                 {managerUsers}
               </p>
             </div>
@@ -695,14 +766,14 @@ const AdminUsers = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-blue-700">Reports access</p>
+          <p className="text-xs font-normal text-blue-700">Reports access</p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-emerald-700">Active</p>
-              <p className="mt-2 text-3xl font-black text-emerald-800">
+              <p className="text-sm font-semibold text-emerald-700">Active</p>
+              <p className="mt-2 text-3xl font-bold text-emerald-800">
                 {activeUsers}
               </p>
             </div>
@@ -712,31 +783,31 @@ const AdminUsers = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-emerald-700">
+          <p className="text-xs font-normal text-emerald-700">
             {staffUsers} staff accounts
           </p>
         </div>
       </section>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-950">
+            <h2 className="text-xl font-semibold text-slate-950">
               Pending Account Requests
             </h2>
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Approve or reject new account requests.
             </p>
           </div>
 
-          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-black text-amber-700">
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
             {pendingUsers.length} pending
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <div className="min-w-[920px]">
-            <div className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_210px] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+            <div className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_210px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Username</div>
               <div>Full Name</div>
@@ -746,13 +817,14 @@ const AdminUsers = () => {
             </div>
 
             {isLoading ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                Loading requests...
-              </div>
+              <SkeletonRows columns={PENDING_ROW_COLUMNS} rows={3} />
             ) : pendingUsers.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                No pending account requests.
-              </div>
+              <EmptyState
+                icon={CheckCircle2}
+                title="No pending account requests"
+                description="New sign-ups will appear here for approval. Nothing is waiting on you right now."
+                className="m-4"
+              />
             ) : (
               <div className="divide-y divide-slate-100">
                 {pendingUsers.map((user) => (
@@ -760,30 +832,30 @@ const AdminUsers = () => {
                     key={user.user_id}
                     className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_210px] items-center px-4 py-4 text-sm"
                   >
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       #{user.user_id}
                     </div>
 
                     <div>
-                      <p className="font-black text-slate-950">
+                      <p className="font-semibold text-slate-950">
                         {user.username}
                       </p>
-                      <p className="mt-1 text-xs font-bold text-amber-600">
+                      <p className="mt-1 text-xs font-normal text-amber-600">
                         Awaiting approval
                       </p>
                     </div>
 
-                    <div className="font-bold text-slate-700">
+                    <div className="font-medium text-slate-700">
                       {user.full_name || "No full name"}
                     </div>
 
-                    <div className="font-bold text-slate-600">
-                      {user.email || "No email"}
+                    <div className="font-medium text-slate-600">
+                      {user.full_name || "No name"}
                     </div>
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getRoleStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getRoleStyle(
                           user.role
                         )}`}
                       >
@@ -795,7 +867,7 @@ const AdminUsers = () => {
                       <button
                         type="button"
                         onClick={() => askApproveUser(user)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-800"
+                        className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-3 py-2 text-xs font-medium text-white transition hover:bg-emerald-800"
                       >
                         <UserCheck size={15} />
                         Approve
@@ -804,7 +876,7 @@ const AdminUsers = () => {
                       <button
                         type="button"
                         onClick={() => askRejectUser(user)}
-                        className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-black text-red-700 transition hover:bg-red-100"
+                        className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-xs font-medium text-red-700 transition hover:bg-red-100"
                       >
                         <UserX size={15} />
                         Reject
@@ -818,11 +890,11 @@ const AdminUsers = () => {
         </div>
       </section>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-950">User List</h2>
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <h2 className="text-xl font-semibold text-slate-950">User List</h2>
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Search, filter, view, update, or delete user accounts.
             </p>
           </div>
@@ -834,15 +906,15 @@ const AdminUsers = () => {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search name, username, email, role..."
-                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-400"
+                placeholder="Search name, username, role..."
+                className="w-full bg-transparent text-sm font-normal text-slate-700 outline-none placeholder:text-slate-400"
               />
             </div>
 
             <select
               value={roleFilter}
               onChange={(event) => setRoleFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
             >
               <option value="All Roles">All Roles</option>
               {roleOptions.map((role) => (
@@ -855,7 +927,7 @@ const AdminUsers = () => {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
             >
               <option value="All Status">All Status</option>
               {statusOptions.map((status) => (
@@ -867,9 +939,9 @@ const AdminUsers = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <div className="min-w-[1080px]">
-            <div className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_130px_170px] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+            <div className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_130px_170px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Username</div>
               <div>Full Name</div>
@@ -880,13 +952,29 @@ const AdminUsers = () => {
             </div>
 
             {isLoading ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                Loading users...
-              </div>
+              <SkeletonRows columns={USER_ROW_COLUMNS} rows={5} />
             ) : filteredUsers.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                No user accounts found.
-              </div>
+              hasActiveFilters ? (
+                <EmptyState
+                  variant="filtered"
+                  icon={Search}
+                  title="No users match your filters"
+                  description="Try a different search term, or reset the filters to see every account."
+                  action={
+                    <HeaderActionButton icon={X} onClick={clearFilters}>
+                      Clear filters
+                    </HeaderActionButton>
+                  }
+                  className="m-4"
+                />
+              ) : (
+                <EmptyState
+                  icon={UserCog}
+                  title="No user accounts yet"
+                  description="Accounts appear here once people sign up and are approved."
+                  className="m-4"
+                />
+              )
             ) : (
               <div className="divide-y divide-slate-100">
                 {filteredUsers.map((user) => (
@@ -894,30 +982,30 @@ const AdminUsers = () => {
                     key={user.user_id}
                     className="grid grid-cols-[90px_1.1fr_1.2fr_1.4fr_130px_130px_170px] items-center px-4 py-4 text-sm"
                   >
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       #{user.user_id}
                     </div>
 
                     <div>
-                      <p className="font-black text-slate-950">
+                      <p className="font-semibold text-slate-950">
                         {user.username}
                       </p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
+                      <p className="mt-1 text-xs font-normal text-slate-400">
                         Account
                       </p>
                     </div>
 
-                    <div className="font-bold text-slate-700">
+                    <div className="font-medium text-slate-700">
                       {user.full_name || "No full name"}
                     </div>
 
-                    <div className="font-bold text-slate-600">
-                      {user.email || "No email"}
+                    <div className="font-medium text-slate-600">
+                      {user.full_name || "No name"}
                     </div>
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getRoleStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getRoleStyle(
                           user.role
                         )}`}
                       >
@@ -927,7 +1015,7 @@ const AdminUsers = () => {
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                           user.status
                         )}`}
                       >

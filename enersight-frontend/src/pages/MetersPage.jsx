@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -19,6 +19,8 @@ import {
 import PageHeader from "../components/PageHeader";
 import ConfirmationModal from "../components/ConfirmationModal";
 import HeaderActionButton from "../components/HeaderActionButton";
+import EmptyState from "../components/EmptyState";
+import SkeletonRows from "../components/SkeletonRows";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import ToastMessage from "../components/ToastMessage";
 
@@ -137,14 +139,14 @@ function getTypeStyle(type) {
 function Field({ label, children, helper }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
         {label}
       </span>
 
       {children}
 
       {helper && (
-        <p className="mt-2 text-xs font-bold leading-5 text-slate-500">
+        <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
           {helper}
         </p>
       )}
@@ -169,14 +171,14 @@ function MeterModal({
 
   return (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-[2rem] border border-slate-200 bg-white shadow-2xl shadow-slate-950/20">
+      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white p-6">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
               Meter Record
             </p>
 
-            <h2 className="mt-2 text-2xl font-black text-slate-950">
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">
               {modal.mode === "add"
                 ? "Add Meter"
                 : modal.mode === "edit"
@@ -184,7 +186,7 @@ function MeterModal({
                 : "Meter Details"}
             </h2>
 
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Connect meters to buildings and readings.
             </p>
           </div>
@@ -208,7 +210,7 @@ function MeterModal({
                   setForm({ ...form, serial_no: event.target.value })
                 }
                 placeholder="Example: MTR-ADM-001"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               />
             </Field>
 
@@ -222,7 +224,7 @@ function MeterModal({
                 onChange={(event) =>
                   setForm({ ...form, building_id: event.target.value })
                 }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 <option value="">Select building</option>
                 {buildings.map((building) => (
@@ -243,7 +245,7 @@ function MeterModal({
                 onChange={(event) =>
                   setForm({ ...form, meter_type: event.target.value })
                 }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 {meterTypes.map((type) => (
                   <option key={type} value={type}>
@@ -260,7 +262,7 @@ function MeterModal({
                 onChange={(event) =>
                   setForm({ ...form, status: event.target.value })
                 }
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
               >
                 {statusOptions.map((status) => (
                   <option key={status} value={status}>
@@ -288,7 +290,7 @@ function MeterModal({
                   setForm({ ...form, initial_reading: event.target.value })
                 }
                 placeholder="e.g. 12345.00"
-                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               />
             </Field>
           </div>
@@ -298,7 +300,7 @@ function MeterModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             {isView ? "Close" : "Cancel"}
           </button>
@@ -308,7 +310,7 @@ function MeterModal({
               type="button"
               disabled={isSaving}
               onClick={onSave}
-              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? "Saving..." : "Save Meter"}
             </button>
@@ -319,7 +321,15 @@ function MeterModal({
   );
 }
 
-const MetersPage = () => {
+// Kept next to the real row's grid-cols-[...] class so the two stay in step.
+const METER_ROW_COLUMNS = "80px 1fr 1.1fr 0.9fr 130px 130px 120px 160px";
+
+const MetersPage = ({ role = "Staff" }) => {
+  // Deleting a meter is Admin-only on the backend (meters.py). Managers can create
+  // and edit, so hide only the destructive actions rather than showing buttons that
+  // answer 403.
+  const canDelete = role === "Admin";
+
   const [meters, setMeters] = useState([]);
   const [buildings, setBuildings] = useState([]);
   const [query, setQuery] = useState("");
@@ -360,13 +370,18 @@ const MetersPage = () => {
     return () => window.clearTimeout(timeoutId);
   }, [toast.message]);
 
-  function getBuildingName(buildingId) {
-    const building = buildings.find(
-      (item) => Number(item.building_id) === Number(buildingId)
-    );
+  // Memoised so the row memo can depend on it, and indexed by id rather than
+  // scanning the buildings array once per row.
+  const getBuildingName = useCallback(
+    (buildingId) => {
+      const building = buildings.find(
+        (item) => Number(item.building_id) === Number(buildingId)
+      );
 
-    return building?.name || "Unassigned building";
-  }
+      return building?.name || "Unassigned building";
+    },
+    [buildings]
+  );
 
   async function fetchBuildings() {
     setIsLoadingBuildings(true);
@@ -455,7 +470,22 @@ const MetersPage = () => {
 
       return matchesSearch && matchesType && matchesStatus && matchesBuilding;
     });
-  }, [meters, query, typeFilter, statusFilter, buildingFilter, buildings]);
+  }, [meters, query, typeFilter, statusFilter, buildingFilter, getBuildingName]);
+
+  // Tells the two empty cases apart: nothing saved yet vs. filters hiding
+  // everything. They need opposite calls to action.
+  const hasActiveFilters =
+    query.trim() !== "" ||
+    typeFilter !== "All Types" ||
+    statusFilter !== "All Status" ||
+    buildingFilter !== "All Buildings";
+
+  function clearFilters() {
+    setQuery("");
+    setTypeFilter("All Types");
+    setStatusFilter("All Status");
+    setBuildingFilter("All Buildings");
+  }
 
   const totalMeters = meters.length;
   const activeMeters = meters.filter((meter) => meter.status === "Active").length;
@@ -783,7 +813,7 @@ const MetersPage = () => {
       : isDeleting;
 
   return (
-    <div className="space-y-6 font-[Nunito]">
+    <div className="space-y-6">
       <ToastMessage
         message={toast.message}
         type={toast.type}
@@ -813,14 +843,16 @@ const MetersPage = () => {
               {isSeeding ? "Loading..." : "Load Samples"}
             </HeaderActionButton>
 
-            <HeaderActionButton
-              icon={Trash2}
-              variant="danger"
-              onClick={askRemoveSamples}
-              disabled={isRemovingSamples}
-            >
-              {isRemovingSamples ? "Removing..." : "Remove Samples"}
-            </HeaderActionButton>
+            {canDelete && (
+              <HeaderActionButton
+                icon={Trash2}
+                variant="danger"
+                onClick={askRemoveSamples}
+                disabled={isRemovingSamples}
+              >
+                {isRemovingSamples ? "Removing..." : "Remove Samples"}
+              </HeaderActionButton>
+            )}
 
             <HeaderActionButton
               icon={Plus}
@@ -835,30 +867,20 @@ const MetersPage = () => {
       />
 
       {buildings.length === 0 && (
-        <section className="rounded-[1.7rem] border border-amber-100 bg-amber-50 p-5 shadow-sm">
-          <div className="flex items-start gap-3">
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-amber-500 text-white">
-              <AlertTriangle size={22} />
-            </div>
-
-            <div>
-              <h2 className="text-lg font-black text-amber-900">
-                No buildings available
-              </h2>
-              <p className="mt-1 text-sm font-bold leading-6 text-amber-700">
-                Add or load buildings first before creating meters.
-              </p>
-            </div>
-          </div>
-        </section>
+        <EmptyState
+          variant="blocked"
+          icon={AlertTriangle}
+          title="No buildings available"
+          description="Every meter must be assigned to a building. Add or load buildings first before creating meters."
+        />
       )}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-slate-500">Total Meters</p>
-              <p className="mt-2 text-3xl font-black text-slate-950">
+              <p className="text-sm font-semibold text-slate-500">Total Meters</p>
+              <p className="mt-2 text-3xl font-bold text-slate-950">
                 {totalMeters}
               </p>
             </div>
@@ -868,16 +890,16 @@ const MetersPage = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-slate-400">
+          <p className="text-xs font-normal text-slate-400">
             Stored meter records
           </p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-emerald-700">Active Meters</p>
-              <p className="mt-2 text-3xl font-black text-emerald-800">
+              <p className="text-sm font-semibold text-emerald-700">Active Meters</p>
+              <p className="mt-2 text-3xl font-bold text-emerald-800">
                 {activeMeters}
               </p>
             </div>
@@ -887,16 +909,16 @@ const MetersPage = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-emerald-700">
+          <p className="text-xs font-normal text-emerald-700">
             Available for readings
           </p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-red-100 bg-red-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-red-100 bg-red-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-red-700">Inactive Meters</p>
-              <p className="mt-2 text-3xl font-black text-red-800">
+              <p className="text-sm font-semibold text-red-700">Inactive Meters</p>
+              <p className="mt-2 text-3xl font-bold text-red-800">
                 {inactiveMeters}
               </p>
             </div>
@@ -906,16 +928,16 @@ const MetersPage = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-red-700">Not currently used</p>
+          <p className="text-xs font-normal text-red-700">Not currently used</p>
         </div>
 
-        <div className="rounded-[1.7rem] border border-blue-100 bg-blue-50 p-5 shadow-sm">
+        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5 shadow-sm">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-black text-blue-700">
+              <p className="text-sm font-semibold text-blue-700">
                 Assigned Buildings
               </p>
-              <p className="mt-2 text-3xl font-black text-blue-800">
+              <p className="mt-2 text-3xl font-bold text-blue-800">
                 {assignedBuildings}
               </p>
             </div>
@@ -925,17 +947,17 @@ const MetersPage = () => {
             </div>
           </div>
 
-          <p className="text-xs font-bold text-blue-700">
+          <p className="text-xs font-normal text-blue-700">
             With assigned meters
           </p>
         </div>
       </section>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-950">Meter List</h2>
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <h2 className="text-xl font-semibold text-slate-950">Meter List</h2>
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Search, filter, view, update, or delete meter records.
             </p>
           </div>
@@ -948,14 +970,14 @@ const MetersPage = () => {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search meter, building, type, or status..."
-                className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-400"
+                className="w-full bg-transparent text-sm font-normal text-slate-700 outline-none placeholder:text-slate-400"
               />
             </div>
 
             <select
               value={typeFilter}
               onChange={(event) => setTypeFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
             >
               <option value="All Types">All Types</option>
               {meterTypes.map((type) => (
@@ -968,7 +990,7 @@ const MetersPage = () => {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
             >
               <option value="All Status">All Status</option>
               {statusOptions.map((status) => (
@@ -981,7 +1003,7 @@ const MetersPage = () => {
             <select
               value={buildingFilter}
               onChange={(event) => setBuildingFilter(event.target.value)}
-              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
             >
               <option value="All Buildings">All Buildings</option>
               {buildings.map((building) => (
@@ -993,9 +1015,9 @@ const MetersPage = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <div className="min-w-[1180px]">
-            <div className="grid grid-cols-[80px_1fr_1.1fr_0.9fr_130px_130px_120px_160px] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+            <div className="grid grid-cols-[80px_1fr_1.1fr_0.9fr_130px_130px_120px_160px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Serial No.</div>
               <div>Building</div>
@@ -1007,13 +1029,39 @@ const MetersPage = () => {
             </div>
 
             {isLoadingMeters ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                Loading meters...
-              </div>
+              <SkeletonRows columns={METER_ROW_COLUMNS} rows={5} />
             ) : filteredMeters.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                No meter records found.
-              </div>
+              hasActiveFilters ? (
+                <EmptyState
+                  variant="filtered"
+                  icon={Search}
+                  title="No meters match your filters"
+                  description="Try a different search term, or reset the filters to see every meter."
+                  action={
+                    <HeaderActionButton icon={X} onClick={clearFilters}>
+                      Clear filters
+                    </HeaderActionButton>
+                  }
+                  className="m-4"
+                />
+              ) : (
+                <EmptyState
+                  icon={Gauge}
+                  title="No meters yet"
+                  description="Assign a meter to a building to start recording energy readings."
+                  action={
+                    <HeaderActionButton
+                      icon={Plus}
+                      variant="dark"
+                      onClick={openAddModal}
+                      disabled={buildings.length === 0}
+                    >
+                      Add Meter
+                    </HeaderActionButton>
+                  }
+                  className="m-4"
+                />
+              )
             ) : (
               <div className="divide-y divide-slate-100">
                 {filteredMeters.map((meter) => (
@@ -1021,20 +1069,20 @@ const MetersPage = () => {
                     key={meter.meter_id}
                     className="grid grid-cols-[80px_1fr_1.1fr_0.9fr_130px_130px_120px_160px] items-center px-4 py-4 text-sm"
                   >
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       #{meter.meter_id}
                     </div>
 
                     <div>
-                      <p className="font-black text-slate-950">
+                      <p className="font-semibold text-slate-950">
                         {meter.serial_no}
                       </p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
+                      <p className="mt-1 text-xs font-normal text-slate-400">
                         Meter record
                       </p>
                     </div>
 
-                    <div className="font-bold text-slate-600">
+                    <div className="font-medium text-slate-600">
                       <div className="flex items-center gap-2">
                         <Building2 size={15} className="text-emerald-700" />
                         <span>{getBuildingName(meter.building_id)}</span>
@@ -1043,7 +1091,7 @@ const MetersPage = () => {
 
                     <div>
                       <span
-                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-black ${getTypeStyle(
+                        className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${getTypeStyle(
                           meter.meter_type
                         )}`}
                       >
@@ -1052,21 +1100,21 @@ const MetersPage = () => {
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2 font-black text-slate-700">
+                    <div className="flex items-center gap-2 font-semibold text-slate-700">
                       <History size={15} className="text-slate-400" />
                       <span>
                         {formatReading(meter.previous_reading)}
-                        <span className="ml-1 text-xs font-bold text-slate-400">
+                        <span className="ml-1 text-xs font-normal text-slate-400">
                           kWh
                         </span>
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2 font-black text-emerald-700">
+                    <div className="flex items-center gap-2 font-semibold text-emerald-700">
                       <TrendingUp size={15} className="text-emerald-600" />
                       <span>
                         {formatReading(meter.latest_reading)}
-                        <span className="ml-1 text-xs font-bold text-slate-400">
+                        <span className="ml-1 text-xs font-normal text-slate-400">
                           kWh
                         </span>
                       </span>
@@ -1074,7 +1122,7 @@ const MetersPage = () => {
 
                     <div>
                       <span
-                        className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                        className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                           meter.status
                         )}`}
                       >
@@ -1102,14 +1150,16 @@ const MetersPage = () => {
                         <Pencil size={16} />
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => askDeleteMeter(meter)}
-                        className="rounded-xl bg-red-50 p-2 text-red-700 transition hover:bg-red-100"
-                        title="Delete meter"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {canDelete && (
+                        <button
+                          type="button"
+                          onClick={() => askDeleteMeter(meter)}
+                          className="rounded-xl bg-red-50 p-2 text-red-700 transition hover:bg-red-100"
+                          title="Delete meter"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

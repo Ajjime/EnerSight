@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Building2,
   CheckCircle2,
+  ClipboardCheck,
   ClipboardList,
   Download,
   Eye,
@@ -21,9 +22,28 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import logo from "../assets/logo/EnerSight Logo.png";
 
 import ToastMessage from "../components/ToastMessage";
+import HeaderActionButton from "../components/HeaderActionButton";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
+import { formatNumber } from "../utils/format";
+import { useElectricityRate } from "../hooks/useElectricityRate";
+import RateNotice from "../components/RateNotice";
+import {
+  annotateReadingCoverage,
+  getEnergyStatus,
+  getReadingSpanDays,
+} from "../utils/energyStatus";
+import {
+  formatOcrAccuracy,
+  getAverageOcrAccuracy,
+  getOcrScore,
+  isLowOcrAccuracy,
+} from "../utils/readingQuality";
+import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
+import StatCard from "../components/StatCard";
+import EmptyState from "../components/EmptyState";
+import SkeletonRows from "../components/SkeletonRows";
 const AUTO_REFRESH_MS = 60000;
 
 const reportTypes = [
@@ -40,6 +60,9 @@ function normalizeBuilding(building) {
     building_id: building.building_id,
     name: building.name || "",
     status: building.status || "Active",
+    // Needed for the energy-intensity status rule, which is what the GIS map and
+    // the Dashboard use. Without it every building here would read "No Data".
+    floor_area: Number(building.floor_area || 0),
   };
 }
 
@@ -65,19 +88,9 @@ function normalizeReading(reading) {
     differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "No image attached",
-    ocr_accuracy: Number(reading.ocr_accuracy || 0),
+    ocr_accuracy: getOcrScore(reading.ocr_accuracy),
     is_verified: Boolean(reading.is_verified),
   };
-}
-
-function formatNumber(value) {
-  const numericValue = Number(value);
-
-  if (Number.isNaN(numericValue)) {
-    return "0";
-  }
-
-  return numericValue.toLocaleString();
 }
 
 function formatDate(value) {
@@ -153,7 +166,7 @@ function isReadingInPeriod(readingDate, period) {
 }
 
 function getStatusStyle(status) {
-  if (status === "Ready" || status === "Verified") {
+  if (status === "Normal" || status === "Verified") {
     return "border-emerald-100 bg-emerald-50 text-emerald-700";
   }
 
@@ -169,6 +182,11 @@ function getStatusStyle(status) {
 }
 
 function getAccuracyStyle(accuracy) {
+  // Manual readings carry no OCR score; see utils/readingQuality.js.
+  if (getOcrScore(accuracy) === null) {
+    return "border-slate-200 bg-slate-50 text-slate-500";
+  }
+
   if (Number(accuracy) >= 90) {
     return "border-emerald-100 bg-emerald-50 text-emerald-700";
   }
@@ -184,17 +202,9 @@ function getReadingStatus(reading) {
   return reading.is_verified ? "Verified" : "Needs Review";
 }
 
-function getConsumptionStatus(total) {
-  if (Number(total) >= 5000) {
-    return "Critical";
-  }
-
-  if (Number(total) >= 2500) {
-    return "High";
-  }
-
-  return "Ready";
-}
+// The status rule now lives in utils/energyStatus.js. This page used to grade by
+// raw kWh (>= 5000 Critical) and label the healthy band "Ready", so the same
+// building could read Critical here, Normal in Analytics and green on the map.
 
 function ReportDetailsModal({ report, onClose }) {
   if (!report) {
@@ -203,18 +213,18 @@ function ReportDetailsModal({ report, onClose }) {
 
   return (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-[2rem] border border-slate-200 bg-white shadow-2xl shadow-slate-950/20">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white p-6">
           <div>
-            <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
               Report Details
             </p>
 
-            <h2 className="mt-2 text-2xl font-black text-slate-950">
+            <h2 className="mt-2 text-2xl font-bold text-slate-950">
               {report.type}
             </h2>
 
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Generated report preview based on stored readings.
             </p>
           </div>
@@ -230,64 +240,64 @@ function ReportDetailsModal({ report, onClose }) {
 
         <div className="grid gap-4 p-6 md:grid-cols-2">
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Building
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {report.building}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Period
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {report.period}
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Total Consumption
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {formatNumber(report.totalConsumption)} kWh
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Average Reading
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {formatNumber(report.averageReading)} kWh
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Highest Reading
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {formatNumber(report.highestReading)} kWh
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Verification
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {report.verifiedCount} verified / {report.pendingCount} review
             </p>
           </div>
 
           <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
-            <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Generated Date
             </p>
-            <p className="mt-2 text-lg font-black text-slate-950">
+            <p className="mt-2 text-lg font-semibold text-slate-950">
               {report.generatedAt}
             </p>
           </div>
@@ -297,7 +307,7 @@ function ReportDetailsModal({ report, onClose }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+            className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
             Close
           </button>
@@ -312,11 +322,13 @@ function PrintTemplate({
   buildingFilter,
   periodFilter,
   totalConsumption,
+  totalCost,
   averageReading,
   highestReading,
   verifiedCount,
   pendingCount,
   buildingReportRows,
+  auditRows = [],
 }) {
   const generatedOn = new Date().toLocaleString("en-US", {
     year: "numeric",
@@ -343,13 +355,14 @@ function PrintTemplate({
   }
 
   function accuracyBadge(accuracy) {
+    if (getOcrScore(accuracy) === null) return badgeStyle("slate");
     if (Number(accuracy) >= 90) return badgeStyle("green");
     if (Number(accuracy) >= 80) return badgeStyle("amber");
     return badgeStyle("red");
   }
 
   function statusBadge(status) {
-    if (status === "Ready" || status === "Verified") return badgeStyle("green");
+    if (status === "Normal" || status === "Verified") return badgeStyle("green");
     if (status === "High" || status === "Needs Review" || status === "Pending") return badgeStyle("amber");
     if (status === "Critical" || status === "Low Accuracy") return badgeStyle("red");
     return badgeStyle("slate");
@@ -358,7 +371,7 @@ function PrintTemplate({
   return (
     <div
       className="hidden print:block"
-      style={{ fontFamily: "'Nunito', sans-serif", background: "white", color: "#0f172a", minHeight: "100vh" }}
+      style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", background: "white", color: "#0f172a", minHeight: "100vh" }}
     >
       {/* Top accent bar */}
       <div style={{ height: "7px", background: "linear-gradient(to right, #047857, #10b981, #a3e635)" }} />
@@ -416,7 +429,7 @@ function PrintTemplate({
           <div style={{ border: "1px solid #e2e8f0", borderRadius: "10px", padding: "14px 18px", background: "white" }}>
             <div style={{ fontSize: "10px", fontWeight: 900, textTransform: "uppercase", letterSpacing: "0.15em", color: "#94a3b8" }}>Total Energy</div>
             <div style={{ fontSize: "26px", fontWeight: 900, color: "#0f172a", margin: "6px 0 2px" }}>{formatNumber(totalConsumption)}</div>
-            <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b" }}>kWh consumed</div>
+            <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748b" }}>kWh · ≈ {formatPeso(totalCost, { decimals: 0 })}</div>
           </div>
           {/* Average */}
           <div style={{ border: "1px solid #bfdbfe", borderRadius: "10px", padding: "14px 18px", background: "#eff6ff" }}>
@@ -447,12 +460,12 @@ function PrintTemplate({
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>
-              {["Building", "Meters", "Readings", "Total (kWh)", "Average", "Peak", "OCR Avg", "Status"].map((col, i) => (
+              {["Building", "Meters", "Readings", "Total (kWh)", "Est. Cost (₱)", "Average", "Peak", "OCR Avg", "Status"].map((col, i) => (
                 <th
                   key={col}
                   style={{
                     padding: "10px 12px",
-                    textAlign: i === 0 ? "left" : i >= 6 ? "center" : "right",
+                    textAlign: i === 0 ? "left" : i >= 7 ? "center" : "right",
                     fontWeight: 900,
                     fontSize: "10px",
                     textTransform: "uppercase",
@@ -469,7 +482,7 @@ function PrintTemplate({
           <tbody>
             {buildingReportRows.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>
+                <td colSpan={9} style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontWeight: 700 }}>
                   No data available for the selected filters.
                 </td>
               </tr>
@@ -485,11 +498,12 @@ function PrintTemplate({
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{row.meterCount}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{row.readingCount}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 900, color: "#0f172a" }}>{formatNumber(row.totalConsumption)}</td>
+                  <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 900, color: "#047857" }}>{formatPeso(row.estimatedCost, { decimals: 0 })}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{formatNumber(row.averageReading)}</td>
                   <td style={{ padding: "11px 12px", textAlign: "right", fontWeight: 700, color: "#475569" }}>{formatNumber(row.highestReading)}</td>
                   <td style={{ padding: "11px 12px", textAlign: "center" }}>
                     <span style={{ display: "inline-block", padding: "3px 9px", borderRadius: "999px", fontSize: "11px", fontWeight: 900, ...accuracyBadge(row.averageAccuracy) }}>
-                      {row.averageAccuracy}%
+                      {formatOcrAccuracy(row.averageAccuracy)}
                     </span>
                   </td>
                   <td style={{ padding: "11px 12px", textAlign: "center" }}>
@@ -516,12 +530,86 @@ function PrintTemplate({
                 <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 900, color: "#047857" }}>
                   {formatNumber(totalConsumption)}
                 </td>
+                <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 900, color: "#047857" }}>
+                  {formatPeso(totalCost, { decimals: 0 })}
+                </td>
                 <td colSpan={4} />
               </tr>
             </tfoot>
           )}
         </table>
       </div>
+
+      {/* Reading audit trail. This is the evidence behind every figure above, and
+          it used to be missing from the printout entirely. */}
+      {auditRows.length > 0 && (
+        <div style={{ padding: "0 40px 80px", breakInside: "auto" }}>
+          <h2
+            style={{
+              fontSize: "14px",
+              fontWeight: 900,
+              color: "#0f172a",
+              margin: "0 0 4px",
+              breakAfter: "avoid",
+            }}
+          >
+            Reading Audit Trail
+          </h2>
+          <p style={{ fontSize: "10px", color: "#64748b", margin: "0 0 10px" }}>
+            {auditRows.length} record{auditRows.length === 1 ? "" : "s"} supporting the
+            figures above.
+          </p>
+
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "10px" }}>
+            <thead style={{ display: "table-header-group" }}>
+              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0" }}>
+                <th style={{ padding: "7px 8px", textAlign: "left", fontWeight: 900 }}>ID</th>
+                <th style={{ padding: "7px 8px", textAlign: "left", fontWeight: 900 }}>Building</th>
+                <th style={{ padding: "7px 8px", textAlign: "left", fontWeight: 900 }}>Meter</th>
+                <th style={{ padding: "7px 8px", textAlign: "right", fontWeight: 900 }}>Reading</th>
+                <th style={{ padding: "7px 8px", textAlign: "right", fontWeight: 900 }}>Used (kWh)</th>
+                <th style={{ padding: "7px 8px", textAlign: "left", fontWeight: 900 }}>Date</th>
+                <th style={{ padding: "7px 8px", textAlign: "center", fontWeight: 900 }}>OCR</th>
+                <th style={{ padding: "7px 8px", textAlign: "center", fontWeight: 900 }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {auditRows.map((row) => (
+                <tr
+                  key={row.record_id}
+                  style={{ borderBottom: "1px solid #f1f5f9", breakInside: "avoid" }}
+                >
+                  <td style={{ padding: "6px 8px", fontWeight: 700 }}>#{row.record_id}</td>
+                  <td style={{ padding: "6px 8px", fontWeight: 700, color: "#0f172a" }}>{row.building}</td>
+                  <td style={{ padding: "6px 8px", color: "#475569" }}>{row.meter}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right" }}>{formatNumber(row.reading_value)}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#047857" }}>
+                    {formatNumber(row.differential)}
+                  </td>
+                  <td style={{ padding: "6px 8px", color: "#475569" }}>{formatDate(row.reading_date)}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    {formatOcrAccuracy(row.ocr_accuracy)}
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "center" }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "2px 7px",
+                        borderRadius: "999px",
+                        fontSize: "9px",
+                        fontWeight: 900,
+                        ...badgeStyle(row.is_verified ? "green" : "amber"),
+                      }}
+                    >
+                      {row.is_verified ? "Verified" : "Pending"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Footer */}
       <div
@@ -548,6 +636,9 @@ function PrintTemplate({
   );
 }
 
+// Kept next to each real row's grid-cols-[...] class so the two stay in step.
+const REPORT_ROW_COLUMNS = "1.3fr 0.6fr 0.7fr 1fr 1fr 1fr 1fr 0.9fr 0.9fr";
+
 const Reports = () => {
   const [buildings, setBuildings] = useState([]);
   const [meters, setMeters] = useState([]);
@@ -556,7 +647,23 @@ const Reports = () => {
   const [buildingFilter, setBuildingFilter] = useState("All Buildings");
   const [periodFilter, setPeriodFilter] = useState("All Time");
   const [query, setQuery] = useState("");
+
+  // Tells the two empty cases apart: nothing recorded yet vs. filters hiding
+  // everything. Report type counts as a filter — it narrows the rows too.
+  const hasActiveFilters =
+    query.trim() !== "" ||
+    reportType !== "Monthly Building Report" ||
+    buildingFilter !== "All Buildings" ||
+    periodFilter !== "All Time";
+
+  function clearFilters() {
+    setQuery("");
+    setReportType("Monthly Building Report");
+    setBuildingFilter("All Buildings");
+    setPeriodFilter("All Time");
+  }
   const [selectedReport, setSelectedReport] = useState(null);
+  const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
   const [toast, setToast] = useState({
     message: "",
     type: "success",
@@ -583,6 +690,9 @@ const Reports = () => {
     return () => window.clearTimeout(timeoutId);
   }, [toast.message]);
 
+  // Rate loading moved to a shared hook so a failure is visible instead of
+  // silently pricing everything at the default rate.
+
   const metersById = useMemo(
     () => new Map(meters.map((m) => [Number(m.meter_id), m])),
     [meters]
@@ -593,23 +703,33 @@ const Reports = () => {
     [buildings]
   );
 
-  function getBuildingName(buildingId) {
-    return buildingsById.get(Number(buildingId))?.name || "Unknown building";
-  }
+  // Memoised so the aggregation memos below can list them as dependencies without
+  // recomputing on every single render.
+  const getBuildingName = useCallback(
+    (buildingId) =>
+      buildingsById.get(Number(buildingId))?.name || "Unknown building",
+    [buildingsById]
+  );
 
-  function getMeter(meterId) {
-    return metersById.get(Number(meterId));
-  }
+  const getMeter = useCallback(
+    (meterId) => metersById.get(Number(meterId)),
+    [metersById]
+  );
 
-  function getMeterBuildingName(meterId) {
-    const meter = getMeter(meterId);
+  // Memoised because the printable audit rows depend on it; as a plain function it
+  // was recreated every render and defeated that memo.
+  const getMeterBuildingName = useCallback(
+    (meterId) => {
+      const meter = metersById.get(Number(meterId));
 
-    if (!meter) {
-      return "Unknown building";
-    }
+      if (!meter) {
+        return "Unknown building";
+      }
 
-    return getBuildingName(meter.building_id);
-  }
+      return buildingsById.get(Number(meter.building_id))?.name || "Unknown building";
+    },
+    [metersById, buildingsById]
+  );
 
   async function fetchBuildings() {
     const response = await apiFetch(`${API_BASE_URL}/buildings/`);
@@ -656,7 +776,9 @@ const Reports = () => {
 
       setBuildings(buildingData);
       setMeters(meterData);
-      setReadings(readingData);
+      // Stamped on the full list, before the period filter can drop the previous
+      // reading that each one's time window is measured from.
+      setReadings(annotateReadingCoverage(readingData));
 
       if (showSuccessToast) {
         showToast("Reports data refreshed successfully.", "success");
@@ -692,19 +814,21 @@ const Reports = () => {
       const matchesSearch =
         String(reading.record_id).includes(searchValue) ||
         String(reading.reading_value).includes(searchValue) ||
-        String(reading.ocr_accuracy).includes(searchValue) ||
+        String(reading.ocr_accuracy ?? "manual").includes(searchValue) ||
         meterSerial.toLowerCase().includes(searchValue) ||
         buildingName.toLowerCase().includes(searchValue) ||
         reading.image_path.toLowerCase().includes(searchValue);
 
       return matchesBuilding && matchesPeriod && matchesSearch;
     });
-  }, [readings, meters, buildings, buildingFilter, periodFilter, query]);
+  }, [readings, buildingFilter, periodFilter, query, getBuildingName, getMeter]);
 
   const totalConsumption = filteredReadings.reduce(
     (sum, reading) => sum + reading.differential,
     0
   );
+
+  const totalCost = totalConsumption * rate;
 
   const averageReading = filteredReadings.length
     ? Math.round(totalConsumption / filteredReadings.length)
@@ -722,9 +846,7 @@ const Reports = () => {
     (reading) => !reading.is_verified
   ).length;
 
-  const lowAccuracyCount = filteredReadings.filter(
-    (reading) => Number(reading.ocr_accuracy) < 90
-  ).length;
+  const lowAccuracyCount = filteredReadings.filter(isLowOcrAccuracy).length;
 
   const buildingReportRows = useMemo(() => {
     return buildings
@@ -760,14 +882,7 @@ const Reports = () => {
           (reading) => !reading.is_verified
         ).length;
 
-        const averageAccuracy = buildingReadings.length
-          ? Math.round(
-              buildingReadings.reduce(
-                (sum, reading) => sum + Number(reading.ocr_accuracy || 0),
-                0
-              ) / buildingReadings.length
-            )
-          : 0;
+        const averageAccuracy = getAverageOcrAccuracy(buildingReadings);
 
         return {
           building_id: building.building_id,
@@ -775,12 +890,19 @@ const Reports = () => {
           meterCount: buildingMeters.length,
           readingCount: buildingReadings.length,
           totalConsumption: buildingTotal,
+          estimatedCost: buildingTotal * rate,
           averageReading: buildingAverage,
           highestReading: buildingHighest,
           verifiedCount: buildingVerified,
           pendingCount: buildingPending,
           averageAccuracy,
-          status: getConsumptionStatus(buildingTotal),
+          // Annualised so the period filter doesn't move a building between bands
+          // without its actual efficiency having changed.
+          status: getEnergyStatus(
+            buildingTotal,
+            building.floor_area,
+            getReadingSpanDays(buildingReadings)
+          ),
         };
       })
       .filter((row) => {
@@ -790,7 +912,7 @@ const Reports = () => {
 
         return row.building === buildingFilter;
       });
-  }, [buildings, meters, filteredReadings, buildingFilter]);
+  }, [buildings, meters, filteredReadings, buildingFilter, rate]);
 
   const reportFilteredRows = useMemo(() => {
     if (reportType === "High Energy Use Report") {
@@ -799,7 +921,10 @@ const Reports = () => {
         .sort((a, b) => b.totalConsumption - a.totalConsumption);
     }
     if (reportType === "Meter Photo Check Report") {
-      return [...buildingReportRows].sort((a, b) => a.averageAccuracy - b.averageAccuracy);
+      // Buildings with only manual readings have no photos to check, so they go last.
+      return [...buildingReportRows].sort(
+        (a, b) => (a.averageAccuracy ?? 101) - (b.averageAccuracy ?? 101)
+      );
     }
     if (reportType === "Audit Support Report") {
       return [...buildingReportRows].sort((a, b) => b.pendingCount - a.pendingCount);
@@ -821,8 +946,8 @@ const Reports = () => {
     }
     if (reportType === "Meter Photo Check Report") {
       return filteredReadings
-        .filter((reading) => Number(reading.ocr_accuracy) < 90 || !reading.is_verified)
-        .sort((a, b) => Number(a.ocr_accuracy) - Number(b.ocr_accuracy));
+        .filter((reading) => isLowOcrAccuracy(reading) || !reading.is_verified)
+        .sort((a, b) => (a.ocr_accuracy ?? 101) - (b.ocr_accuracy ?? 101));
     }
     if (reportType === "Audit Support Report") {
       return [...filteredReadings].sort(
@@ -832,7 +957,27 @@ const Reports = () => {
     return [...filteredReadings].sort(
       (a, b) => new Date(b.reading_date) - new Date(a.reading_date)
     );
-  }, [filteredReadings, buildingReportRows, reportType, meters]);
+  }, [filteredReadings, buildingReportRows, reportType, metersById]);
+
+  // Flattened for the printout. The Audit Support Report is precisely the evidence
+  // a reader needs on paper, yet the audit table was print:hidden and never made it
+  // into the printed document at all.
+  const printableAuditRows = useMemo(() => {
+    return reportFilteredReadings.map((reading) => {
+      const meter = metersById.get(Number(reading.meter_id));
+
+      return {
+        record_id: reading.record_id,
+        building: getMeterBuildingName(reading.meter_id),
+        meter: meter?.serial_no || `Meter #${reading.meter_id}`,
+        reading_value: reading.reading_value,
+        differential: reading.differential,
+        reading_date: reading.reading_date,
+        ocr_accuracy: reading.ocr_accuracy,
+        is_verified: reading.is_verified,
+      };
+    });
+  }, [reportFilteredReadings, metersById, getMeterBuildingName]);
 
   const REPORT_CONTEXT = {
     "Monthly Building Report": {
@@ -897,7 +1042,8 @@ const Reports = () => {
       "Building",
       "Meters",
       "Readings",
-      "Total Consumption",
+      "Total Consumption (kWh)",
+      "Estimated Cost (PHP)",
       "Average Reading",
       "Highest Reading",
       "Verified",
@@ -906,16 +1052,25 @@ const Reports = () => {
       "Status",
     ];
 
-    const rows = buildingReportRows.map((row) => [
+    // Export what the user is actually looking at. This used to map
+    // buildingReportRows, the unfiltered set, so choosing "High Energy Use Report"
+    // narrowed the table and the printout but still exported every building.
+    if (!reportFilteredRows.length) {
+      showToast("There is nothing to export for the current filters.", "error");
+      return;
+    }
+
+    const rows = reportFilteredRows.map((row) => [
       row.building,
       row.meterCount,
       row.readingCount,
       row.totalConsumption,
+      Math.round(row.estimatedCost),
       row.averageReading,
       row.highestReading,
       row.verifiedCount,
       row.pendingCount,
-      `${row.averageAccuracy}%`,
+      formatOcrAccuracy(row.averageAccuracy),
       row.status,
     ]);
 
@@ -927,21 +1082,32 @@ const Reports = () => {
       )
       .join("\n");
 
-    const blob = new Blob([csvContent], {
+    // Excel reads a BOM-less UTF-8 CSV as the system codepage, which mangles the
+    // peso sign and any non-ASCII building name.
+    const blob = new Blob(["﻿", csvContent], {
       type: "text/csv;charset=utf-8;",
     });
+
+    // Name the file after the report and the day it was taken, so a folder of
+    // exports is still identifiable a week later.
+    const slug = reportType.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `enersight-${slug}-${stamp}.csv`;
 
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
 
     link.href = url;
-    link.setAttribute("download", "enersight-report.csv");
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
 
     URL.revokeObjectURL(url);
-    showToast("CSV report exported successfully.", "success");
+    showToast(
+      `Exported ${rows.length} building${rows.length === 1 ? "" : "s"} to ${filename}.`,
+      "success"
+    );
   }
 
   function printReport() {
@@ -949,7 +1115,7 @@ const Reports = () => {
   }
 
   return (
-    <div className="space-y-6 font-[Nunito]">
+    <div className="space-y-6">
       <ToastMessage
         message={toast.message}
         type={toast.type}
@@ -968,44 +1134,47 @@ const Reports = () => {
           intervalMs={AUTO_REFRESH_MS}
           actions={
             <>
-              <button
-                type="button"
+              {/* These three used to be hand-rolled with dark-header styling
+                  (white text on bg-white/15), but PageHeader's actions slot sits on
+                  a light background, so Export CSV and Print rendered as white text
+                  on near-white and were effectively invisible. Every other page
+                  uses HeaderActionButton, which has correct light-mode variants. */}
+              <HeaderActionButton
+                icon={Download}
                 onClick={exportCsv}
-                disabled={buildingReportRows.length === 0}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/15 px-3 text-xs font-black text-white shadow-sm transition hover:bg-white/25 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={reportFilteredRows.length === 0}
               >
-                <Download size={15} />
                 Export CSV
-              </button>
+              </HeaderActionButton>
 
-              <button
-                type="button"
-                onClick={printReport}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/15 px-3 text-xs font-black text-white shadow-sm transition hover:bg-white/25"
-              >
-                <Printer size={15} />
+              <HeaderActionButton icon={Printer} onClick={printReport}>
                 Print
-              </button>
+              </HeaderActionButton>
 
-              <button
-                type="button"
+              <HeaderActionButton
+                icon={Eye}
+                variant="dark"
                 onClick={() => setSelectedReport(generatedReport)}
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-slate-950 px-3 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700"
               >
-                <Eye size={15} />
                 Preview
-              </button>
+              </HeaderActionButton>
             </>
           }
         />
       </div>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+      <RateNotice
+        isFallback={isRateFallback}
+        error={rateError}
+        className="print:hidden"
+      />
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_1.4fr]">
           <select
             value={reportType}
             onChange={(event) => setReportType(event.target.value)}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
           >
             {reportTypes.map((type) => (
               <option key={type} value={type}>
@@ -1017,7 +1186,7 @@ const Reports = () => {
           <select
             value={buildingFilter}
             onChange={(event) => setBuildingFilter(event.target.value)}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
           >
             <option value="All Buildings">All Buildings</option>
             {buildings.map((building) => (
@@ -1030,7 +1199,7 @@ const Reports = () => {
           <select
             value={periodFilter}
             onChange={(event) => setPeriodFilter(event.target.value)}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
+            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
           >
             {periodOptions.map((period) => (
               <option key={period} value={period}>
@@ -1046,93 +1215,95 @@ const Reports = () => {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search report data..."
-              className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-400"
+              className="w-full bg-transparent text-sm font-normal text-slate-700 outline-none placeholder:text-slate-400"
             />
           </div>
         </div>
       </section>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 print:hidden">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-black text-slate-500">
-                Total Energy Used
-              </p>
-              <p className="mt-2 text-3xl font-black text-slate-950">
-                {formatNumber(totalConsumption)}
-              </p>
+        <StatCard
+          title="Total Energy Used"
+          value={formatNumber(totalConsumption)}
+          icon={FileText}
+          description={`kWh · ≈ ${formatPeso(totalCost, { decimals: 0 })} estimated bill`}
+        />
+
+        <StatCard
+          title="Average Reading"
+          value={formatNumber(averageReading)}
+          icon={FileSpreadsheet}
+          tone="blue"
+          description="Average kWh per record"
+        />
+
+        <StatCard
+          title="Highest Reading"
+          value={formatNumber(highestReading)}
+          icon={TrendingUp}
+          tone="red"
+          description="Peak reading in selected data"
+        />
+
+        <StatCard
+          title="Needs Review"
+          value={pendingCount}
+          icon={AlertTriangle}
+          tone="amber"
+          description={`${verifiedCount} verified, ${lowAccuracyCount} low accuracy`}
+        />
+      </section>
+
+      {/* Report scope — moved off the Dashboard, where it only repeated counts
+          the overview cards already showed. Here it states which records a
+          generated report is actually built from. */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-950 text-lime-300">
+              <ClipboardCheck size={21} />
             </div>
 
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-              <FileText size={23} />
+            <div>
+              <h2 className="text-lg font-semibold text-slate-950">
+                Report Scope
+              </h2>
+
+              <p className="mt-1 text-sm font-normal text-slate-500">
+                Reports are built from the saved readings, buildings, and meter
+                assignments below.
+              </p>
             </div>
           </div>
 
-          <p className="text-xs font-bold text-slate-400">
-            kWh from selected report data
-          </p>
-        </div>
-
-        <div className="rounded-[1.7rem] border border-blue-100 bg-blue-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-black text-blue-700">
-                Average Reading
+          <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 sm:shrink-0">
+            <div className="px-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                Readings
               </p>
-              <p className="mt-2 text-3xl font-black text-blue-800">
-                {formatNumber(averageReading)}
+              <p className="mt-1 text-xl font-semibold text-slate-950">
+                {readings.length}
               </p>
             </div>
 
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-600 text-white">
-              <FileSpreadsheet size={23} />
+            <div className="px-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                Buildings
+              </p>
+              <p className="mt-1 text-xl font-semibold text-slate-950">
+                {buildings.length}
+              </p>
+            </div>
+
+            <div className="px-2 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                Meters
+              </p>
+              <p className="mt-1 text-xl font-semibold text-slate-950">
+                {meters.length}
+              </p>
             </div>
           </div>
-
-          <p className="text-xs font-bold text-blue-700">
-            Average kWh per record
-          </p>
-        </div>
-
-        <div className="rounded-[1.7rem] border border-red-100 bg-red-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-black text-red-700">
-                Highest Reading
-              </p>
-              <p className="mt-2 text-3xl font-black text-red-800">
-                {formatNumber(highestReading)}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-red-500 text-white">
-              <TrendingUp size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-bold text-red-700">
-            Peak reading in selected data
-          </p>
-        </div>
-
-        <div className="rounded-[1.7rem] border border-amber-100 bg-amber-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-black text-amber-700">Needs Review</p>
-              <p className="mt-2 text-3xl font-black text-amber-800">
-                {pendingCount}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-500 text-white">
-              <AlertTriangle size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-bold text-amber-700">
-            {verifiedCount} verified, {lowAccuracyCount} low accuracy
-          </p>
         </div>
       </section>
 
@@ -1146,7 +1317,7 @@ const Reports = () => {
               key={card.title}
               type="button"
               onClick={card.action}
-              className={`rounded-[1.7rem] border p-5 text-left shadow-sm transition ${
+              className={`rounded-2xl border p-5 text-left shadow-sm transition ${
                 isActive
                   ? "border-emerald-200 bg-emerald-50"
                   : "border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50"
@@ -1158,7 +1329,7 @@ const Reports = () => {
                 </div>
 
                 <span
-                  className={`rounded-full border px-3 py-1 text-xs font-black ${
+                  className={`rounded-full border px-3 py-1 text-xs font-medium ${
                     isActive
                       ? "border-emerald-200 bg-white text-emerald-700"
                       : "border-slate-100 bg-slate-50 text-slate-500"
@@ -1168,11 +1339,11 @@ const Reports = () => {
                 </span>
               </div>
 
-              <h3 className="text-base font-black text-slate-950">
+              <h3 className="text-base font-semibold text-slate-950">
                 {card.title}
               </h3>
 
-              <p className="mt-2 text-sm font-bold leading-6 text-slate-500">
+              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">
                 {card.description}
               </p>
             </button>
@@ -1180,23 +1351,23 @@ const Reports = () => {
         })}
       </section>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-950">
+            <h2 className="text-xl font-semibold text-slate-950">
               Generated Report Preview
             </h2>
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               {reportType} • {buildingFilter} • {periodFilter}
             </p>
           </div>
 
           <div className="flex flex-col items-end gap-2">
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
               Generated: {formatDateTime(new Date().toISOString())}
             </div>
             {REPORT_CONTEXT[reportType] && (
-              <p className={`text-xs font-bold ${
+              <p className={`text-xs font-normal ${
                 REPORT_CONTEXT[reportType].color === "red"
                   ? "text-red-500"
                   : REPORT_CONTEXT[reportType].color === "amber"
@@ -1211,13 +1382,14 @@ const Reports = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
-          <div className="min-w-[1080px]">
-            <div className="grid grid-cols-[1.3fr_0.7fr_0.8fr_1fr_1fr_1fr_0.9fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
+          <div className="min-w-[1200px]">
+            <div className="grid grid-cols-[1.3fr_0.6fr_0.7fr_1fr_1fr_1fr_1fr_0.9fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Building</div>
               <div>Meters</div>
               <div>Readings</div>
               <div>Total</div>
+              <div>Est. Cost</div>
               <div>Average</div>
               <div>Highest</div>
               <div>OCR Avg.</div>
@@ -1225,64 +1397,83 @@ const Reports = () => {
             </div>
 
             {isLoading ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                Loading report data...
-              </div>
+              <SkeletonRows columns={REPORT_ROW_COLUMNS} rows={5} />
             ) : reportFilteredRows.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                {reportType === "High Energy Use Report"
-                  ? "No high or critical consumption buildings found."
-                  : "No report data found."}
-              </div>
+              <EmptyState
+                variant={hasActiveFilters ? "filtered" : "empty"}
+                icon={hasActiveFilters ? Search : FileText}
+                title={
+                  reportType === "High Energy Use Report"
+                    ? "No high or critical consumption buildings"
+                    : "No report data"
+                }
+                description={
+                  hasActiveFilters
+                    ? "No buildings match the current report type, period, or search. Reset the filters to see everything."
+                    : "Reports are built from saved meter readings. Add readings first and they will appear here."
+                }
+                action={
+                  hasActiveFilters ? (
+                    <HeaderActionButton icon={X} onClick={clearFilters}>
+                      Clear filters
+                    </HeaderActionButton>
+                  ) : null
+                }
+                className="m-4"
+              />
             ) : (
               <div className="divide-y divide-slate-100">
                 {reportFilteredRows.map((row) => (
                   <div
                     key={row.building_id}
-                    className="grid grid-cols-[1.3fr_0.7fr_0.8fr_1fr_1fr_1fr_0.9fr_0.9fr] items-center px-4 py-4 text-sm"
+                    className="grid grid-cols-[1.3fr_0.6fr_0.7fr_1fr_1fr_1fr_1fr_0.9fr_0.9fr] items-center px-4 py-4 text-sm"
                   >
                     <div>
-                      <p className="font-black text-slate-950">
+                      <p className="font-semibold text-slate-950">
                         {row.building}
                       </p>
-                      <p className="mt-1 text-xs font-bold text-slate-400">
+                      <p className="mt-1 text-xs font-normal text-slate-400">
                         {row.verifiedCount} verified / {row.pendingCount} review
                       </p>
                     </div>
 
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       {row.meterCount}
                     </div>
 
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       {row.readingCount}
                     </div>
 
-                    <div className="font-black text-slate-950">
+                    <div className="font-semibold text-slate-950">
                       {formatNumber(row.totalConsumption)} kWh
                     </div>
 
-                    <div className="font-bold text-slate-600">
+                    <div className="font-semibold text-emerald-700">
+                      {formatPeso(row.estimatedCost, { decimals: 0 })}
+                    </div>
+
+                    <div className="font-medium text-slate-600">
                       {formatNumber(row.averageReading)} kWh
                     </div>
 
-                    <div className="font-bold text-slate-600">
+                    <div className="font-medium text-slate-600">
                       {formatNumber(row.highestReading)} kWh
                     </div>
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getAccuracyStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getAccuracyStyle(
                           row.averageAccuracy
                         )}`}
                       >
-                        {row.averageAccuracy}%
+                        {formatOcrAccuracy(row.averageAccuracy)}
                       </span>
                     </div>
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                           row.status
                         )}`}
                       >
@@ -1297,24 +1488,24 @@ const Reports = () => {
         </div>
       </section>
 
-      <section className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
         <div className="mb-5 flex items-center gap-3">
           <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-700 text-white">
             <ClipboardList size={23} />
           </div>
           <div>
-            <h2 className="text-lg font-black text-slate-950">
+            <h2 className="text-lg font-semibold text-slate-950">
               Reading Audit Trail
             </h2>
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Source records included in the selected report period.
             </p>
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <div className="min-w-[1080px]">
-            <div className="grid grid-cols-[90px_1.1fr_1.1fr_1fr_1fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+            <div className="grid grid-cols-[90px_1.1fr_1.1fr_1fr_1fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Building</div>
               <div>Meter</div>
@@ -1325,13 +1516,30 @@ const Reports = () => {
             </div>
 
             {reportFilteredReadings.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                {reportType === "Meter Photo Check Report"
-                  ? "No low-accuracy or unverified readings found."
-                  : reportType === "High Energy Use Report"
-                  ? "No readings from high-consumption buildings."
-                  : "No audit records found."}
-              </div>
+              <EmptyState
+                variant={hasActiveFilters ? "filtered" : "empty"}
+                icon={hasActiveFilters ? Search : ClipboardList}
+                title={
+                  reportType === "Meter Photo Check Report"
+                    ? "No low-accuracy or unverified readings"
+                    : reportType === "High Energy Use Report"
+                    ? "No readings from high-consumption buildings"
+                    : "No audit records"
+                }
+                description={
+                  hasActiveFilters
+                    ? "No readings match the current report type, period, or search. Reset the filters to see everything."
+                    : "Saved meter readings appear here so you can audit accuracy and verification status."
+                }
+                action={
+                  hasActiveFilters ? (
+                    <HeaderActionButton icon={X} onClick={clearFilters}>
+                      Clear filters
+                    </HeaderActionButton>
+                  ) : null
+                }
+                className="m-4"
+              />
             ) : (
               <div className="divide-y divide-slate-100">
                 {reportFilteredReadings.map((reading) => {
@@ -1343,39 +1551,39 @@ const Reports = () => {
                       key={reading.record_id}
                       className="grid grid-cols-[90px_1.1fr_1.1fr_1fr_1fr_1fr_0.9fr] items-center px-4 py-4 text-sm"
                     >
-                      <div className="font-black text-slate-700">
+                      <div className="font-semibold text-slate-700">
                         #{reading.record_id}
                       </div>
 
-                      <div className="font-black text-slate-950">
+                      <div className="font-semibold text-slate-950">
                         {buildingName}
                       </div>
 
-                      <div className="font-bold text-slate-600">
+                      <div className="font-medium text-slate-600">
                         {meter?.serial_no || `Meter #${reading.meter_id}`}
                       </div>
 
-                      <div className="font-black text-slate-950">
+                      <div className="font-semibold text-slate-950">
                         {formatNumber(reading.reading_value)} kWh
                       </div>
 
-                      <div className="font-bold text-slate-600">
+                      <div className="font-medium text-slate-600">
                         {formatDate(reading.reading_date)}
                       </div>
 
                       <div>
                         <span
-                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getAccuracyStyle(
+                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getAccuracyStyle(
                             reading.ocr_accuracy
                           )}`}
                         >
-                          {Math.round(reading.ocr_accuracy)}%
+                          {formatOcrAccuracy(reading.ocr_accuracy)}
                         </span>
                       </div>
 
                       <div>
                         <span
-                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                          className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                             getReadingStatus(reading)
                           )}`}
                         >
@@ -1396,11 +1604,13 @@ const Reports = () => {
         buildingFilter={buildingFilter}
         periodFilter={periodFilter}
         totalConsumption={totalConsumption}
+        totalCost={totalCost}
         averageReading={averageReading}
         highestReading={highestReading}
         verifiedCount={verifiedCount}
         pendingCount={pendingCount}
         buildingReportRows={reportFilteredRows}
+        auditRows={printableAuditRows}
       />
 
       <ReportDetailsModal

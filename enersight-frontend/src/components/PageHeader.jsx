@@ -40,7 +40,7 @@ function HeaderPill({ children }) {
   }
 
   return (
-    <span className="inline-flex min-h-8 max-w-full items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs font-black leading-none text-white shadow-sm">
+    <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium leading-none text-slate-600">
       {children}
     </span>
   );
@@ -63,63 +63,58 @@ export default function PageHeader({
   const hasPills = Boolean(role || status || children);
 
   return (
-    <section className="relative min-h-[260px] overflow-hidden rounded-[1.7rem] bg-gradient-to-br from-emerald-950 via-emerald-800 to-lime-500 p-8 text-white shadow-sm">
-      <div className="pointer-events-none absolute inset-0 opacity-25">
-        <div className="absolute -left-20 -top-24 h-64 w-64 rounded-full bg-white/20 blur-3xl" />
-        <div className="absolute -bottom-24 right-0 h-72 w-72 rounded-full bg-lime-300/30 blur-3xl" />
-      </div>
+    <section className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
+      <div className="flex min-w-0 items-start gap-3">
+        {Icon && (
+          <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-700">
+            <Icon size={19} />
+          </span>
+        )}
 
-      {showAutoRefresh && (
-        <div className="absolute right-4 top-4 z-20 inline-flex h-6 items-center gap-1.5 rounded-full border border-white/20 bg-white px-2.5 text-[10px] font-black text-emerald-800 shadow-sm">
-          {isRefreshing ? (
-            <RefreshCw size={10} className="animate-spin" />
-          ) : (
-            <Clock3 size={10} />
+        <div className="min-w-0">
+          {eyebrow && (
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
+              {eyebrow}
+            </p>
           )}
 
-          <span className="whitespace-nowrap">
-            {formatInterval(intervalMs)} • {formatLastUpdated(lastUpdated)}
-          </span>
-        </div>
-      )}
+          <h1 className="mt-1 text-2xl font-bold leading-tight tracking-tight text-slate-900">
+            {title || "Dashboard"}
+          </h1>
 
-      <div className="relative z-10 max-w-5xl pr-0 md:pr-40">
-        <div className="mb-6 inline-flex max-w-full items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 shadow-sm">
-          {Icon && (
-            <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-lime-300/20 text-lime-200">
-              <Icon size={14} />
+          {subtitle && (
+            <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
+              {subtitle}
+            </p>
+          )}
+
+          {hasPills && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {role && <HeaderPill>Role: {role}</HeaderPill>}
+              {status && <HeaderPill>{status}</HeaderPill>}
+              {children}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:justify-end">
+        {showAutoRefresh && (
+          <span className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-500">
+            {isRefreshing ? (
+              <RefreshCw size={13} className="animate-spin text-emerald-600" />
+            ) : (
+              <Clock3 size={13} className="text-slate-400" />
+            )}
+
+            <span className="whitespace-nowrap">
+              {formatInterval(intervalMs)} · {formatLastUpdated(lastUpdated)}
             </span>
-          )}
-
-          <span className="truncate text-xs font-black uppercase tracking-[0.32em] text-lime-100">
-            {eyebrow || "EnerSight"}
           </span>
-        </div>
-
-        <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl">
-          {title || "Dashboard"}
-        </h1>
-
-        {subtitle && (
-          <p className="mt-4 max-w-4xl text-base font-bold leading-7 text-emerald-50 md:text-lg">
-            {subtitle}
-          </p>
         )}
 
-        {hasPills && (
-          <div className="mt-6 flex flex-wrap items-center gap-2">
-            {role && <HeaderPill>Role: {role}</HeaderPill>}
-            {status && <HeaderPill>{status}</HeaderPill>}
-            {children}
-          </div>
-        )}
+        {actions}
       </div>
-
-      {actions && (
-        <div className="relative z-20 mt-8 flex flex-wrap items-center gap-3 md:absolute md:bottom-7 md:right-7 md:mt-0 md:justify-end">
-          {actions}
-        </div>
-      )}
     </section>
   );
 }

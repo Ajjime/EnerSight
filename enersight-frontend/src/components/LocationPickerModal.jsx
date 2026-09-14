@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Crosshair,
   LocateFixed,
@@ -109,25 +109,61 @@ const LocationPickerModal = ({
   const [address, setAddress] = useState("");
   const [isGeocoding, setIsGeocoding] = useState(false);
 
-  const fetchAddress = useCallback(async (lat, lng) => {
+  // Holds the in-flight reverse-geocode so a newer click can cancel it. Without
+  // this, rapid clicks raced and whichever response landed last won, so the
+  // displayed address could belong to a previously clicked point while the
+  // coordinates showed the current one.
+  const geocodeRef = useRef({ controller: null, timer: null });
+
+  const fetchAddress = useCallback((lat, lng) => {
+    const pending = geocodeRef.current;
+
+    pending.controller?.abort();
+    window.clearTimeout(pending.timer);
+
     setIsGeocoding(true);
     setAddress("");
-    try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-        { headers: { "Accept-Language": "en" } }
-      );
-      const data = await response.json();
-      setAddress(data.display_name || "Address not found");
-    } catch {
-      setAddress("Could not fetch address");
-    } finally {
-      setIsGeocoding(false);
-    }
+
+    // Nominatim's usage policy caps callers at one request per second, and this
+    // used to fire on every single map click. Debounce so dragging the pin around
+    // does not get the deployment's IP blocked.
+    pending.timer = window.setTimeout(async () => {
+      const controller = new AbortController();
+      pending.controller = controller;
+
+      // A hung request otherwise leaves "Fetching address..." on screen forever.
+      const timeoutId = window.setTimeout(() => controller.abort(), 10000);
+
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
+          { headers: { "Accept-Language": "en" }, signal: controller.signal }
+        );
+        const data = await response.json();
+
+        if (!controller.signal.aborted) {
+          setAddress(data.display_name || "Address not found");
+        }
+      } catch (error) {
+        // An abort means a newer click superseded this one; leave its state alone.
+        if (error?.name !== "AbortError") {
+          setAddress("Could not fetch address");
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+
+        if (!controller.signal.aborted) {
+          setIsGeocoding(false);
+        }
+      }
+    }, 400);
   }, []);
 
+  // Resets the modal each time it opens. Setting state is the whole purpose of this
+  // effect, and there is nothing to derive it from, so the rule does not apply.
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedLocation(initialPosition);
       setLocationMessage("");
       setAddress("");
@@ -137,6 +173,16 @@ const LocationPickerModal = ({
       }
     }
   }, [isOpen, initialPosition, fetchAddress]);
+
+  // Drop any in-flight lookup when the modal unmounts.
+  useEffect(() => {
+    const pending = geocodeRef.current;
+
+    return () => {
+      pending.controller?.abort();
+      window.clearTimeout(pending.timer);
+    };
+  }, []);
 
   function handleLocationSelect(location) {
     setSelectedLocation(location);
@@ -193,19 +239,19 @@ const LocationPickerModal = ({
 
   return (
     <div className="fixed inset-0 z-[60000] flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm">
-      <div className="w-full max-w-5xl overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl shadow-slate-950/30">
+      <div className="w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-black uppercase tracking-[0.14em] text-emerald-700">
+            <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
               <MapPin size={14} />
               Select Building Location
             </div>
 
-            <h2 className="text-2xl font-black text-slate-950">
+            <h2 className="text-2xl font-bold text-slate-950">
               Click the exact location on the map
             </h2>
 
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               The address will be captured automatically.
             </p>
           </div>
@@ -220,7 +266,7 @@ const LocationPickerModal = ({
         </div>
 
         <div className="grid gap-5 p-5 lg:grid-cols-[1fr_300px]">
-          <div className="overflow-hidden rounded-[1.5rem] border border-emerald-100">
+          <div className="overflow-hidden rounded-2xl border border-emerald-100">
             <MapContainer
               center={mapCenter}
               zoom={17}
@@ -251,16 +297,16 @@ const LocationPickerModal = ({
             </MapContainer>
           </div>
 
-          <aside className="flex flex-col rounded-[1.5rem] border border-slate-200 bg-slate-50 p-5">
+          <aside className="flex flex-col rounded-2xl border border-slate-200 bg-slate-50 p-5">
             <div className="mb-5 grid h-14 w-14 place-items-center rounded-2xl bg-emerald-700 text-white">
               <Crosshair size={25} />
             </div>
 
-            <h3 className="text-lg font-black text-slate-950">
+            <h3 className="text-lg font-semibold text-slate-950">
               Selected Location
             </h3>
 
-            <p className="mt-1 text-sm font-bold leading-6 text-slate-500">
+            <p className="mt-1 text-sm font-normal leading-6 text-slate-500">
               Click on the map or use your current device location.
             </p>
 
@@ -269,11 +315,11 @@ const LocationPickerModal = ({
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center gap-2">
                   <MapPinned size={14} className="shrink-0 text-emerald-700" />
-                  <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                     Address
                   </p>
                 </div>
-                <p className="mt-2 text-sm font-bold leading-5 text-slate-950">
+                <p className="mt-2 text-sm font-normal leading-5 text-slate-950">
                   {isGeocoding
                     ? "Fetching address..."
                     : address
@@ -287,20 +333,20 @@ const LocationPickerModal = ({
               {/* Lat / Lng — secondary */}
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
-                  <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                     Lat
                   </p>
-                  <p className="mt-0.5 text-xs font-black text-slate-600">
+                  <p className="mt-0.5 text-xs font-medium text-slate-600">
                     {selectedLocation
                       ? formatCoordinate(selectedLocation.latitude)
                       : "—"}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
-                  <p className="text-xs font-black uppercase tracking-[0.12em] text-slate-400">
+                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                     Lng
                   </p>
-                  <p className="mt-0.5 text-xs font-black text-slate-600">
+                  <p className="mt-0.5 text-xs font-medium text-slate-600">
                     {selectedLocation
                       ? formatCoordinate(selectedLocation.longitude)
                       : "—"}
@@ -310,7 +356,7 @@ const LocationPickerModal = ({
             </div>
 
             {locationMessage && (
-              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-bold leading-6 text-amber-700">
+              <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-normal leading-6 text-amber-700">
                 {locationMessage}
               </div>
             )}
@@ -319,7 +365,7 @@ const LocationPickerModal = ({
               <button
                 type="button"
                 onClick={handleUseCurrentLocation}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               >
                 <LocateFixed size={18} />
                 Use My Current Location
@@ -328,7 +374,7 @@ const LocationPickerModal = ({
               <button
                 type="button"
                 onClick={handleConfirmLocation}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-emerald-700"
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700"
               >
                 <Navigation size={18} />
                 Use This Location

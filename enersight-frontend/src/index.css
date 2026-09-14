@@ -1,8 +1,8 @@
-@import url("https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900;1000&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 @import "tailwindcss";
 
 :root {
-  font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 
   --energy-dark: #020617;
   --energy-green: #047857;
@@ -37,7 +37,7 @@ body,
   min-height: 100vh;
   width: 100%;
   background: var(--energy-bg);
-  font-family: "Nunito", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 body {
@@ -65,55 +65,77 @@ img {
 }
 
 .energy-card {
-  @apply rounded-[1.7rem] border border-slate-200 bg-white shadow-sm;
+  @apply rounded-2xl border border-slate-200 bg-white shadow-sm;
 }
 
 .energy-soft-card {
-  @apply rounded-[1.7rem] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-slate-50 to-lime-50 shadow-sm;
+  @apply rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 via-slate-50 to-lime-50 shadow-sm;
 }
 
 .energy-title {
-  @apply text-2xl font-black tracking-tight text-slate-950;
+  @apply text-2xl font-bold tracking-tight text-slate-950;
 }
 
 .energy-subtitle {
-  @apply mt-1 text-sm font-bold leading-6 text-slate-500;
+  @apply mt-1 text-sm font-normal leading-6 text-slate-500;
 }
 
 .energy-label {
-  @apply text-xs font-black uppercase tracking-[0.18em] text-slate-400;
+  @apply text-xs font-semibold uppercase tracking-[0.18em] text-slate-400;
 }
 
 .energy-input {
-  @apply w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white;
+  @apply w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white;
+}
+
+/* Keyboard focus indicator.
+ *
+ * Almost every input, select and button in the app carries `outline-none`, and the
+ * only replacement was a 1px border-colour change to emerald, which is far too
+ * subtle to satisfy WCAG 2.4.11 and effectively invisible on the buttons that have
+ * no border at all. `:focus-visible` only fires for keyboard navigation, so this
+ * costs mouse users nothing.
+ *
+ * Applied last and with a high-specificity selector so it wins over the utility
+ * classes that removed the outline in the first place. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--energy-green-light);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* On a dark surface the lime accent reads better than the green. */
+.bg-slate-950 :where(a, button, input, select, textarea, [tabindex]):focus-visible,
+.bg-slate-900 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline-color: var(--energy-lime);
 }
 
 .energy-button-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60;
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
 .energy-button-secondary {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50;
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50;
 }
 
 .energy-button-danger {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-black text-white transition hover:bg-red-700;
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700;
 }
 
 .energy-badge-green {
-  @apply inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-black text-emerald-700;
+  @apply inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700;
 }
 
 .energy-badge-amber {
-  @apply inline-flex items-center gap-2 rounded-full border border-amber-100 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700;
+  @apply inline-flex items-center gap-2 rounded-full border border-amber-100 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700;
 }
 
 .energy-badge-red {
-  @apply inline-flex items-center gap-2 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-black text-red-700;
+  @apply inline-flex items-center gap-2 rounded-full border border-red-100 bg-red-50 px-3 py-1 text-xs font-medium text-red-700;
 }
 
 .energy-badge-blue {
-  @apply inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-black text-blue-700;
+  @apply inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700;
 }
 
 .energy-icon-green {
@@ -133,11 +155,11 @@ img {
 }
 
 .energy-table-head {
-  @apply bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400;
+  @apply bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400;
 }
 
 .energy-table-cell {
-  @apply px-4 py-3 text-sm font-bold text-slate-600;
+  @apply px-4 py-3 text-sm font-normal text-slate-600;
 }
 
 /* Perf: promote sticky header to its own compositor layer */
@@ -166,6 +188,166 @@ header[class*="sticky"] {
 .energy-map-shell .leaflet-container {
   position: relative;
   z-index: 0;
+}
+
+/* GIS Map page: base-map chrome, status pins and hover labels. */
+.energy-gis-map .leaflet-container {
+  background: #e9eef0;
+  font-family: inherit;
+}
+
+/* Mutes OSM's saturated road and POI colours so the status pins carry the colour. */
+.energy-street-tiles {
+  filter: saturate(0.4) contrast(0.94) brightness(1.04);
+}
+
+.energy-gis-map .leaflet-control-attribution {
+  border-top-left-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #64748b;
+  backdrop-filter: blur(4px);
+}
+
+.energy-gis-map .leaflet-control-attribution a {
+  color: #475569;
+}
+
+.energy-marker {
+  background: transparent;
+  border: 0;
+}
+
+/* Teardrop pin in a 36x42 box. The head is a 30px square with one square corner,
+ * rotated -45deg about its centre (18, 18), which puts that corner — the tip — at
+ * (18, 39). BuildingMap's iconAnchor must stay [18, 39] to match. Scaling happens
+ * about the tip so a selected pin grows upward without drifting off its spot. */
+.energy-pin {
+  position: absolute;
+  inset: 0;
+  transform-origin: 18px 39px;
+  transition: transform 160ms ease;
+}
+
+.leaflet-marker-icon:hover .energy-pin {
+  transform: scale(1.08);
+}
+
+.energy-pin.is-selected,
+.leaflet-marker-icon:hover .energy-pin.is-selected {
+  transform: scale(1.18);
+}
+
+/* Soft ground shadow under the tip. */
+.energy-pin::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 37px;
+  width: 12px;
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.3);
+  filter: blur(1px);
+}
+
+.energy-pin__head {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 2px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: var(--pin-color);
+  box-shadow: 0 4px 10px rgba(15, 23, 42, 0.3);
+  transform: rotate(-45deg);
+}
+
+.energy-pin.is-selected .energy-pin__head {
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--pin-color) 30%, transparent),
+    0 6px 14px rgba(15, 23, 42, 0.35);
+}
+
+.energy-pin__glyph {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  transform: rotate(45deg);
+}
+
+/* Critical buildings send a slow ring out from the tip. */
+.energy-pin__pulse {
+  position: absolute;
+  left: 11px;
+  top: 32px;
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: var(--pin-color);
+  opacity: 0;
+}
+
+.energy-pin.is-critical .energy-pin__pulse {
+  animation: energyPinPulse 1.8s ease-out infinite;
+}
+
+@keyframes energyPinPulse {
+  from {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+
+  to {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+.energy-pin__label {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 2;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  border-radius: 9999px;
+  background: #0f172a;
+  padding: 4px 10px;
+  color: #fff;
+  font: 600 11px/1.3 "Plus Jakarta Sans", system-ui, sans-serif;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+  pointer-events: none;
+}
+
+.energy-map-tooltip.leaflet-tooltip {
+  border: 0;
+  border-radius: 0.75rem;
+  background: #0f172a;
+  padding: 6px 10px;
+  color: #fff;
+  font-family: inherit;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.25);
+}
+
+.energy-map-tooltip.leaflet-tooltip-top::before {
+  border-top-color: #0f172a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .energy-pin,
+  .energy-pin.is-critical .energy-pin__pulse {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* Toast animation */
@@ -266,6 +448,30 @@ header[class*="sticky"] {
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
+}
+
+/* Loading placeholder used by SkeletonRows. The sweep is decorative, so it is
+   dropped entirely when the viewer has asked for reduced motion. */
+.energy-skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 37%, #e2e8f0 63%);
+  background-size: 400% 100%;
+  animation: energySkeletonSweep 1.4s ease-in-out infinite;
+}
+
+@keyframes energySkeletonSweep {
+  from {
+    background-position: 100% 50%;
+  }
+  to {
+    background-position: 0 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .energy-skeleton {
+    background: #e2e8f0;
+    animation: none;
+  }
 }
 
 ::-webkit-scrollbar-track {

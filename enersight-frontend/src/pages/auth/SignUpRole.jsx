@@ -18,24 +18,31 @@ import {
   User,
   UserPlus,
 } from "lucide-react";
+import { clearSavedLogin } from "../../utils/session";
+import { getPasswordError, getPasswordStrength } from "../../utils/password";
 
-function getPasswordStrength(pwd) {
-  if (!pwd) return null;
-  let score = 0;
-  if (pwd.length >= 8) score++;
-  if (pwd.length >= 12) score++;
-  if (/[A-Z]/.test(pwd)) score++;
-  if (/[0-9]/.test(pwd)) score++;
-  if (/[^A-Za-z0-9]/.test(pwd)) score++;
+// Presentation for the meter. The score itself comes from utils/password.js, the
+// same module that decides whether the password is allowed at all, so the bar and
+// the submit rule can no longer disagree.
+const STRENGTH_LEVELS = [
+  { label: "Weak", color: "bg-red-500", text: "text-red-600", segments: 1 },
+  { label: "Fair", color: "bg-amber-400", text: "text-amber-600", segments: 2 },
+  { label: "Good", color: "bg-lime-500", text: "text-lime-600", segments: 3 },
+  { label: "Strong", color: "bg-emerald-600", text: "text-emerald-700", segments: 4 },
+];
 
-  if (score <= 1) return { level: 0, label: "Weak", color: "bg-red-500", text: "text-red-600", segments: 1 };
-  if (score === 2) return { level: 1, label: "Fair", color: "bg-amber-400", text: "text-amber-600", segments: 2 };
-  if (score === 3) return { level: 2, label: "Good", color: "bg-lime-500", text: "text-lime-600", segments: 3 };
-  return { level: 3, label: "Strong", color: "bg-emerald-600", text: "text-emerald-700", segments: 4 };
+function describePasswordStrength(pwd) {
+  const score = getPasswordStrength(pwd);
+
+  if (score === null) {
+    return null;
+  }
+
+  return { level: score, ...STRENGTH_LEVELS[score] };
 }
 
 function PasswordMeter({ password }) {
-  const strength = getPasswordStrength(password);
+  const strength = describePasswordStrength(password);
   if (!strength) return null;
 
   return (
@@ -50,7 +57,7 @@ function PasswordMeter({ password }) {
           />
         ))}
       </div>
-      <p className={`text-[11px] font-black ${strength.text}`}>
+      <p className={`text-[11px] font-medium ${strength.text}`}>
         {strength.label} password
         {strength.level === 0 && " — add uppercase, numbers, or symbols"}
         {strength.level === 1 && " — try adding numbers or symbols"}
@@ -90,13 +97,6 @@ const SignUpRole = ({ onBack }) => {
   const [successMessage, setSuccessMessage] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  function clearSavedLogin() {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
-    localStorage.removeItem("role");
-    localStorage.removeItem("fullName");
-  }
-
   async function handleSignUp(event) {
     event.preventDefault();
 
@@ -114,8 +114,12 @@ const SignUpRole = ({ onBack }) => {
       return;
     }
 
-    if (!password) {
-      setErrorMessage("Please enter a password.");
+    // The meter next to this field used to be the only feedback, and it never
+    // stopped a weak password from being submitted.
+    const passwordError = getPasswordError(password);
+
+    if (passwordError) {
+      setErrorMessage(passwordError);
       return;
     }
 
@@ -183,21 +187,21 @@ const SignUpRole = ({ onBack }) => {
       <button
         type="button"
         onClick={handleGoToLogin}
-        className="mb-5 inline-flex items-center gap-2 text-sm font-black text-emerald-700 hover:text-emerald-800"
+        className="mb-5 inline-flex items-center gap-2 text-sm font-semibold text-emerald-700 hover:text-emerald-800"
       >
         <ArrowLeft size={18} />
         Back to login
       </button>
 
       {errorMessage && (
-        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-5 py-4 text-sm font-black text-red-700">
+        <div className="mb-4 flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-5 py-4 text-sm font-semibold text-red-700">
           <AlertTriangle size={19} className="mt-0.5 shrink-0" />
           <span>{errorMessage}</span>
         </div>
       )}
 
       {successMessage && (
-        <div className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-5 py-4 text-sm font-black text-emerald-700">
+        <div className="mb-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-5 py-4 text-sm font-semibold text-emerald-700">
           <div className="flex items-start gap-3">
             <CheckCircle2 size={20} className="mt-0.5 shrink-0" />
             <p>{successMessage}</p>
@@ -206,7 +210,7 @@ const SignUpRole = ({ onBack }) => {
           <button
             type="button"
             onClick={handleGoToLogin}
-            className="mt-3 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-black text-white hover:bg-emerald-800"
+            className="mt-3 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
           >
             Go to login
           </button>
@@ -225,7 +229,7 @@ const SignUpRole = ({ onBack }) => {
               value={fullName}
               onChange={(event) => setFullName(event.target.value)}
               placeholder="Enter full name"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
           </div>
         </FormField>
@@ -241,7 +245,7 @@ const SignUpRole = ({ onBack }) => {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="Enter username"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
           </div>
         </FormField>
@@ -259,7 +263,7 @@ const SignUpRole = ({ onBack }) => {
                   onClick={() => setRole(item.value)}
                   className={`rounded-2xl border p-3 text-left transition ${
                     isActive
-                      ? "border-emerald-200 bg-emerald-50 shadow-sm shadow-emerald-900/5"
+                      ? "border-emerald-200 bg-emerald-50 shadow-sm"
                       : "border-slate-200 bg-slate-50 hover:border-emerald-100 hover:bg-white"
                   }`}
                 >
@@ -279,10 +283,10 @@ const SignUpRole = ({ onBack }) => {
                     )}
                   </div>
 
-                  <p className="mt-2 text-sm font-black text-slate-950">
+                  <p className="mt-2 text-sm font-semibold text-slate-950">
                     {item.label}
                   </p>
-                  <p className="mt-1 text-[11px] font-bold leading-4 text-slate-500">
+                  <p className="mt-1 text-[11px] font-normal leading-4 text-slate-500">
                     {item.description}
                   </p>
                 </button>
@@ -290,7 +294,7 @@ const SignUpRole = ({ onBack }) => {
             })}
           </div>
 
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-2 text-xs font-black text-slate-500">
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
             <ShieldCheck size={14} />
             Admin accounts are created only by the system owner.
           </div>
@@ -308,7 +312,7 @@ const SignUpRole = ({ onBack }) => {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter password"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
 
             <button
@@ -336,7 +340,7 @@ const SignUpRole = ({ onBack }) => {
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               placeholder="Confirm password"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
             />
 
             <button
@@ -354,17 +358,17 @@ const SignUpRole = ({ onBack }) => {
           </div>
 
           {confirmPassword && password !== confirmPassword && (
-            <p className="mt-1.5 text-[11px] font-black text-red-600">Passwords do not match</p>
+            <p className="mt-1.5 text-[11px] font-medium text-red-600">Passwords do not match</p>
           )}
           {confirmPassword && password === confirmPassword && (
-            <p className="mt-1.5 text-[11px] font-black text-emerald-700">Passwords match</p>
+            <p className="mt-1.5 text-[11px] font-medium text-emerald-700">Passwords match</p>
           )}
         </FormField>
 
         <button
           type="submit"
           disabled={isLoading}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isLoading ? (
             <>

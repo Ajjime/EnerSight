@@ -6,13 +6,10 @@ import {
   Building2,
   CheckCircle2,
   ChevronRight,
-  ClipboardCheck,
   Clock3,
   Database,
-  FileDown,
-  FileText,
   Gauge,
-  Map,
+  Map as MapIcon,
   MapPinned,
   ScanLine,
   TrendingUp,
@@ -21,7 +18,16 @@ import {
 } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
+import MiniEnergyMap from "../components/MiniEnergyMap";
+import StatCard from "../components/StatCard";
+import EmptyState from "../components/EmptyState";
+import HeaderActionButton from "../components/HeaderActionButton";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
+import {
+  MONTH_LABELS,
+  buildForecastSeries,
+  getNextMonthLabelsFromKey,
+} from "../utils/forecast";
 import {
   Bar,
   CartesianGrid,
@@ -36,6 +42,22 @@ import {
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
+import { formatCompact, formatDecimal, formatNumber } from "../utils/format";
+import {
+  annotateReadingCoverage,
+  annualizeEui,
+  computeEui,
+  getEnergyStatus,
+  getReadingSpanDays,
+} from "../utils/energyStatus";
+import {
+  getAverageOcrAccuracy,
+  getOcrScore,
+  isLowOcrAccuracy,
+} from "../utils/readingQuality";
+import { useElectricityRate } from "../hooks/useElectricityRate";
+import RateNotice from "../components/RateNotice";
+import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
 const AUTO_REFRESH_MS = 30000;
 
 function normalizeBuilding(building) {
@@ -72,50 +94,9 @@ function normalizeReading(reading) {
     differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "",
-    ocr_accuracy: Number(reading.ocr_accuracy || 0),
+    ocr_accuracy: getOcrScore(reading.ocr_accuracy),
     is_verified: Boolean(reading.is_verified),
   };
-}
-
-function formatNumber(value) {
-  const number = Number(value || 0);
-
-  if (Number.isNaN(number)) {
-    return "0";
-  }
-
-  return Math.round(number).toLocaleString();
-}
-
-function formatCompact(value) {
-  const number = Number(value || 0);
-
-  if (Number.isNaN(number)) {
-    return "0";
-  }
-
-  if (number >= 1000000) {
-    return `${(number / 1000000).toFixed(1)}M`;
-  }
-
-  if (number >= 1000) {
-    return `${(number / 1000).toFixed(1)}K`;
-  }
-
-  return Math.round(number).toLocaleString();
-}
-
-function formatDecimal(value) {
-  const number = Number(value || 0);
-
-  if (Number.isNaN(number)) {
-    return "0.00";
-  }
-
-  return number.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 }
 
 function formatDate(value) {
@@ -173,50 +154,12 @@ function getRelativeDate(value) {
   return formatDate(value);
 }
 
-function getMonthName(value) {
-  if (!value) {
-    return "Unknown";
-  }
+// getMonthName was removed with the year-blind month bucketing it existed for.
+// Month labels now come from MONTH_LABELS plus the reading's year.
 
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown";
-  }
-
-  return date.toLocaleString("en-US", {
-    month: "short",
-  });
-}
-
-function computeEui(consumption, floorArea) {
-  const totalConsumption = Number(consumption || 0);
-  const area = Number(floorArea || 0);
-
-  if (totalConsumption <= 0 || area <= 0) {
-    return 0;
-  }
-
-  return totalConsumption / area;
-}
-
-function getEnergyStatus(consumption, floorArea) {
-  const eui = computeEui(consumption, floorArea);
-
-  if (Number(consumption || 0) <= 0 || Number(floorArea || 0) <= 0) {
-    return "No Data";
-  }
-
-  if (eui > 20) {
-    return "Critical";
-  }
-
-  if (eui > 10) {
-    return "High";
-  }
-
-  return "Normal";
-}
+// computeEui and getEnergyStatus were local copies of the same thresholds that
+// BuildingMap also carried. Both now come from utils/energyStatus.js so the
+// Dashboard, the map, Analytics and Reports cannot drift apart again.
 
 function getStatusClass(status) {
   if (status === "Normal" || status === "Verified" || status === "Active") {
@@ -250,106 +193,50 @@ function getDotClass(status) {
   return "bg-slate-400";
 }
 
-function getMapMarkerStyle(status) {
-  if (status === "Normal") {
-    return {
-      shell: "bg-emerald-600 text-white shadow-emerald-900/30",
-      glow: "bg-emerald-400/35",
-      pulse: "border-emerald-300/70",
-    };
-  }
-
-  if (status === "High") {
-    return {
-      shell: "bg-amber-500 text-white shadow-amber-900/30",
-      glow: "bg-amber-300/40",
-      pulse: "border-amber-300/80",
-    };
-  }
-
-  if (status === "Critical") {
-    return {
-      shell: "bg-red-500 text-white shadow-red-900/35",
-      glow: "bg-red-400/45",
-      pulse: "border-red-300/80",
-    };
-  }
-
-  return {
-    shell: "bg-slate-500 text-white shadow-slate-900/20",
-    glow: "bg-slate-300/35",
-    pulse: "border-slate-300/70",
-  };
-}
-
 // ─── Prediction Utilities ────────────────────────────────────────────────────
-
-const ALL_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-
-function getNextMonthLabels(lastMonthLabel, count) {
-  const idx = ALL_MONTHS.indexOf(lastMonthLabel);
-  if (idx === -1) return ALL_MONTHS.slice(0, count);
-  return Array.from({ length: count }, (_, i) => ALL_MONTHS[(idx + 1 + i) % 12]);
-}
-
-function computeMovingAvgForecast(values, windowSize = 3, horizon = 3) {
-  const valid = values.filter((v) => v > 0);
-  if (valid.length === 0) return Array(horizon).fill(0);
-  const w = Math.min(windowSize, valid.length);
-  const slice = valid.slice(-w);
-  const avg = Math.round(slice.reduce((s, v) => s + v, 0) / w);
-  return Array(horizon).fill(avg);
-}
-
-function computeLinearForecast(values, horizon = 3) {
-  const valid = values.filter((v) => v > 0);
-  const n = valid.length;
-  if (n === 0) return Array(horizon).fill(0);
-  if (n === 1) return Array(horizon).fill(Math.round(valid[0]));
-  const x = valid.map((_, i) => i);
-  const sumX = x.reduce((s, v) => s + v, 0);
-  const sumY = valid.reduce((s, v) => s + v, 0);
-  const sumXY = x.reduce((s, v, i) => s + v * valid[i], 0);
-  const sumX2 = x.reduce((s, v) => s + v * v, 0);
-  const denom = n * sumX2 - sumX * sumX;
-  if (denom === 0) return Array(horizon).fill(Math.round(valid[0]));
-  const slope = (n * sumXY - sumX * sumY) / denom;
-  const intercept = (sumY - slope * sumX) / n;
-  return Array.from({ length: horizon }, (_, i) =>
-    Math.max(0, Math.round(intercept + slope * (n + i)))
-  );
-}
 
 /**
  * Builds combined chart data: historical months (actual) + forecast months (ma + linear).
  * Connects the lines at the last historical point as a bridge.
  */
 function buildForecastChartData(monthlyConsumption, horizon = 3) {
-  const activeMonths = monthlyConsumption.filter((d) => d.value > 0);
-  if (activeMonths.length === 0) return [];
-  const values = activeMonths.map((d) => d.value);
-  const maForecast = computeMovingAvgForecast(values, 3, horizon);
-  const linearForecast = computeLinearForecast(values, horizon);
-  const lastMonth = activeMonths[activeMonths.length - 1];
-  const futureLabels = getNextMonthLabels(lastMonth.month, horizon);
-  const historical = activeMonths.map((d, idx) => ({
-    month: d.month,
-    actual: d.value,
-    ma: idx === activeMonths.length - 1 ? maForecast[0] : null,
-    linear: idx === activeMonths.length - 1 ? linearForecast[0] : null,
-    isForecast: false,
-  }));
-  const forecast = futureLabels.map((month, i) => ({
-    month,
-    actual: null,
-    ma: maForecast[i],
-    linear: linearForecast[i],
-    isForecast: true,
-  }));
-  return [...historical, ...forecast];
+  // Year-aware labels, so a forecast that crosses into January is not confused
+  // with the previous January already on the axis.
+  return buildForecastSeries(monthlyConsumption, horizon, (lastPoint, count) =>
+    getNextMonthLabelsFromKey(lastPoint.sortKey, count)
+  );
 }
 
 // ─── EnergyForecastCard ───────────────────────────────────────────────────────
+
+function ForecastTooltip({ active, payload, label, chartData }) {
+  if (!active || !payload || payload.length === 0) return null;
+  const isForecast = chartData.find((d) => d.month === label)?.isForecast;
+  const filtered = payload.filter((e) => e.value !== null && e.value !== undefined);
+  return (
+    <div className="rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-xl min-w-[150px]">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className="text-[11px] font-medium text-slate-700">{label}</span>
+        {isForecast && (
+          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">
+            Predicted
+          </span>
+        )}
+      </div>
+      {filtered.map((entry) => (
+        <div key={entry.dataKey} className="flex items-center justify-between gap-3 mt-1">
+          <div className="flex items-center gap-1">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: entry.color }} />
+            <span className="text-[10px] font-normal text-slate-400">
+              {entry.dataKey === "actual" ? "Actual" : entry.dataKey === "ma" ? "Avg." : "Trend"}
+            </span>
+          </div>
+          <span className="text-[11px] font-medium text-slate-700">{formatNumber(entry.value)} kWh</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function EnergyForecastCard({ monthlyConsumption }) {
   const HORIZON = 3;
@@ -376,38 +263,9 @@ function EnergyForecastCard({ monthlyConsumption }) {
   const maDiff         = lastActual > 0 ? ((nextMa - lastActual) / lastActual) * 100 : 0;
   const linearDiff     = lastActual > 0 ? ((nextLinear - lastActual) / lastActual) * 100 : 0;
 
-  const ForecastTooltip = ({ active, payload, label }) => {
-    if (!active || !payload || payload.length === 0) return null;
-    const isForecast = data.find((d) => d.month === label)?.isForecast;
-    const filtered   = payload.filter((e) => e.value !== null && e.value !== undefined);
-    return (
-      <div className="rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-xl shadow-slate-900/10 min-w-[150px]">
-        <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="text-[11px] font-black text-slate-700">{label}</span>
-          {isForecast && (
-            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-black text-emerald-700">
-              Predicted
-            </span>
-          )}
-        </div>
-        {filtered.map((entry) => (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-3 mt-1">
-            <div className="flex items-center gap-1">
-              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: entry.color }} />
-              <span className="text-[10px] font-bold text-slate-400">
-                {entry.dataKey === "actual" ? "Actual" : entry.dataKey === "ma" ? "Avg." : "Trend"}
-              </span>
-            </div>
-            <span className="text-[11px] font-black text-slate-700">{formatNumber(entry.value)} kWh</span>
-          </div>
-        ))}
-      </div>
-    );
-  };
-
   return (
     <div
-      className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm"
+      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
       style={{
         opacity: visible ? 1 : 0,
         transform: visible ? "translateY(0)" : "translateY(12px)",
@@ -417,12 +275,12 @@ function EnergyForecastCard({ monthlyConsumption }) {
       {/* ── Header row ── */}
       <div className="mb-4 flex items-center justify-between gap-4">
         <div>
-          <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-emerald-700">
+          <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
             <TrendingUp size={11} />
             Forecast
           </div>
-          <h2 className="text-base font-black text-slate-950">Energy Forecast</h2>
-          <p className="text-xs font-bold text-slate-400">Predicted usage for the next {HORIZON} months.</p>
+          <h2 className="text-base font-semibold text-slate-950">Energy Forecast</h2>
+          <p className="text-xs font-normal text-slate-400">Predicted usage for the next {HORIZON} months.</p>
         </div>
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-emerald-700 text-white shadow-sm">
           <TrendingUp size={19} />
@@ -430,7 +288,7 @@ function EnergyForecastCard({ monthlyConsumption }) {
       </div>
 
       {!hasForecast ? (
-        <div className="rounded-2xl border border-slate-100 bg-slate-50 py-5 text-center text-sm font-black text-slate-400">
+        <div className="rounded-2xl border border-slate-100 bg-slate-50 py-5 text-center text-sm font-semibold text-slate-400">
           Add more meter readings to see predictions.
         </div>
       ) : (
@@ -443,31 +301,31 @@ function EnergyForecastCard({ monthlyConsumption }) {
               transition: "opacity 400ms ease 150ms",
             }}
           >
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:shadow-slate-900/5">
-              <p className="text-[10px] font-black text-emerald-600">Avg. Estimate · {firstForecast}</p>
-              <p className="mt-1 text-xl font-black text-emerald-800">
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
+              <p className="text-[10px] font-medium text-emerald-600">Avg. Estimate · {firstForecast}</p>
+              <p className="mt-1 text-xl font-semibold text-emerald-800">
                 {formatNumber(nextMa)}
-                <span className="ml-1 text-xs font-black text-emerald-500">kWh</span>
+                <span className="ml-1 text-xs font-medium text-emerald-500">kWh</span>
               </p>
               <div className="mt-1 flex items-center gap-1.5">
-                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-black ${maDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-white text-emerald-600"}`}>
+                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${maDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-white text-emerald-600"}`}>
                   {maDiff >= 0 ? "↑" : "↓"} {Math.abs(maDiff).toFixed(1)}%
                 </span>
-                <span className="text-[9px] font-bold text-slate-400">vs last month</span>
+                <span className="text-[9px] font-normal text-slate-400">vs last month</span>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md hover:shadow-slate-900/5">
-              <p className="text-[10px] font-black text-slate-500">Trend Estimate · {firstForecast}</p>
-              <p className="mt-1 text-xl font-black text-slate-950">
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
+              <p className="text-[10px] font-medium text-slate-500">Trend Estimate · {firstForecast}</p>
+              <p className="mt-1 text-xl font-semibold text-slate-950">
                 {formatNumber(nextLinear)}
-                <span className="ml-1 text-xs font-black text-slate-400">kWh</span>
+                <span className="ml-1 text-xs font-medium text-slate-400">kWh</span>
               </p>
               <div className="mt-1 flex items-center gap-1.5">
-                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-black ${linearDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>
+                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${linearDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>
                   {linearDiff >= 0 ? "↑" : "↓"} {Math.abs(linearDiff).toFixed(1)}%
                 </span>
-                <span className="text-[9px] font-bold text-slate-400">vs last month</span>
+                <span className="text-[9px] font-normal text-slate-400">vs last month</span>
               </div>
             </div>
           </div>
@@ -479,18 +337,18 @@ function EnergyForecastCard({ monthlyConsumption }) {
           >
             <div className="flex items-center gap-1">
               <span className="h-2 w-2 rounded-full bg-emerald-600" />
-              <span className="text-[10px] font-black text-slate-400">Actual</span>
+              <span className="text-[10px] font-medium text-slate-400">Actual</span>
             </div>
             <div className="flex items-center gap-1">
               <span className="block h-0 w-4" style={{ borderTop: "2px dashed #059669" }} />
-              <span className="text-[10px] font-black text-slate-400">Avg. Est.</span>
+              <span className="text-[10px] font-medium text-slate-400">Avg. Est.</span>
             </div>
             <div className="flex items-center gap-1">
               <span className="block h-0 w-4" style={{ borderTop: "2px dashed #94a3b8" }} />
-              <span className="text-[10px] font-black text-slate-400">Trend Est.</span>
+              <span className="text-[10px] font-medium text-slate-400">Trend Est.</span>
             </div>
             {bridgeMonth && (
-              <span className="ml-auto rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[9px] font-black text-emerald-600">
+              <span className="ml-auto rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-600">
                 Predicted from {bridgeMonth}
               </span>
             )}
@@ -512,7 +370,7 @@ function EnergyForecastCard({ monthlyConsumption }) {
                 <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="month" tick={{ fontSize: 10, fontWeight: 700, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fontWeight: 700, fill: "#94a3b8" }} axisLine={false} tickLine={false} width={48} />
-                <Tooltip content={<ForecastTooltip />} cursor={{ fill: "rgba(16,185,129,0.04)" }} />
+                <Tooltip content={<ForecastTooltip chartData={data} />} cursor={{ fill: "rgba(16,185,129,0.04)" }} />
                 {bridgeMonth && (
                   <ReferenceLine x={bridgeMonth} stroke="#cbd5e1" strokeWidth={1.5} strokeDasharray="4 3" />
                 )}
@@ -525,38 +383,13 @@ function EnergyForecastCard({ monthlyConsumption }) {
 
           {/* ── Note ── */}
           <p
-            className="mt-3 text-[10px] font-bold leading-4 text-slate-400"
+            className="mt-3 text-[10px] font-normal leading-4 text-slate-400"
             style={{ opacity: visible ? 1 : 0, transition: "opacity 400ms ease 450ms" }}
           >
             Based on saved meter readings. Avg. uses last 3 months · Trend follows usage direction.
           </p>
         </>
       )}
-    </div>
-  );
-}
-
-function StatCard({ title, value, unit, subtitle, icon: Icon, color = "emerald" }) {
-  const palette = {
-    emerald: { bg: "border-emerald-100 bg-emerald-50", title: "text-emerald-700", value: "text-emerald-800", icon: "bg-emerald-700 text-white" },
-    amber:   { bg: "border-amber-100 bg-amber-50",    title: "text-amber-700",   value: "text-amber-800",   icon: "bg-amber-500 text-white" },
-    red:     { bg: "border-red-100 bg-red-50",        title: "text-red-700",     value: "text-red-800",     icon: "bg-red-500 text-white" },
-    blue:    { bg: "border-blue-100 bg-blue-50",      title: "text-blue-700",    value: "text-blue-800",    icon: "bg-blue-600 text-white" },
-  };
-  const c = palette[color] ?? { bg: "border-slate-200 bg-white", title: "text-slate-500", value: "text-slate-950", icon: "bg-slate-950 text-lime-300" };
-
-  return (
-    <div className={`rounded-[1.7rem] border p-5 shadow-sm ${c.bg}`}>
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <p className={`text-sm font-black ${c.title}`}>{title}</p>
-          <p className={`mt-2 text-3xl font-black ${c.value}`}>{value}</p>
-        </div>
-        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${c.icon}`}>
-          <Icon size={23} />
-        </div>
-      </div>
-      <p className={`text-xs font-bold ${c.title}`}>{subtitle}</p>
     </div>
   );
 }
@@ -571,7 +404,7 @@ function ToastMessage({ toast, onClose }) {
   return (
     <div className="fixed right-5 top-28 z-[50000] w-[calc(100%-2.5rem)] max-w-md">
       <div
-        className={`flex items-start gap-3 rounded-3xl border p-4 shadow-2xl shadow-slate-950/10 ${
+        className={`flex items-start gap-3 rounded-2xl border p-4 shadow-xl ${
           isError
             ? "border-red-100 bg-red-50 text-red-800"
             : "border-emerald-100 bg-emerald-50 text-emerald-800"
@@ -586,11 +419,11 @@ function ToastMessage({ toast, onClose }) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-black">
+          <p className="text-sm font-semibold">
             {isError ? "Something went wrong" : "Success"}
           </p>
 
-          <p className="mt-1 text-sm font-bold leading-5 opacity-80">
+          <p className="mt-1 text-sm font-normal leading-5 opacity-80">
             {toast.message}
           </p>
         </div>
@@ -665,13 +498,13 @@ function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
   ];
 
   return (
-    <div className="relative overflow-hidden rounded-[26px] border border-slate-100 bg-gradient-to-b from-white to-emerald-50/40 px-5 pb-5 pt-5">
-      <div className="absolute right-6 top-6 z-10 hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-xl shadow-slate-900/10 md:block">
-        <p className="text-xs font-black text-slate-900">Current Summary</p>
-        <p className="mt-1 text-[11px] font-bold text-emerald-700">
+    <div className="relative overflow-hidden rounded-2xl border border-slate-100 bg-gradient-to-b from-white to-emerald-50/40 px-5 pb-5 pt-5">
+      <div className="absolute right-6 top-6 z-10 hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-xl md:block">
+        <p className="text-xs font-medium text-slate-900">Current Summary</p>
+        <p className="mt-1 text-[11px] font-normal text-emerald-700">
           Total: {formatNumber(totalConsumption)} kWh
         </p>
-        <p className="text-[11px] font-bold text-slate-400">
+        <p className="text-[11px] font-normal text-slate-400">
           Based on saved meter readings
         </p>
       </div>
@@ -716,7 +549,7 @@ function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
                 x={paddingX - 14}
                 y={y + 5}
                 textAnchor="end"
-                className="fill-slate-400 text-[11px] font-black"
+                className="fill-slate-400 text-[11px] font-medium"
               >
                 {`${formatCompact(tick)} kWh`}
               </text>
@@ -764,7 +597,7 @@ function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
                 x={point.x}
                 y={point.y - 17}
                 textAnchor="middle"
-                className="fill-emerald-700 text-[12px] font-black"
+                className="fill-emerald-700 text-[12px] font-medium"
               >
                 {formatCompact(point.value)}
               </text>
@@ -774,7 +607,7 @@ function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
               x={point.x}
               y={height - 18}
               textAnchor="middle"
-              className="fill-slate-500 text-[13px] font-black"
+              className="fill-slate-500 text-[13px] font-medium"
             >
               {point.month}
             </text>
@@ -825,14 +658,14 @@ function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
 function SectionCard({ children, className = "" }) {
   return (
     <div
-      className={`relative overflow-hidden rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm ${className}`}
+      className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-5 shadow-sm ${className}`}
     >
       {children}
     </div>
   );
 }
 
-function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
+function EuiComparisonCard({ buildingComparison, setCurrentPage, rate }) {
   const topBuildings = buildingComparison.slice(0, 4);
   const maxEui = Math.max(...topBuildings.map((item) => item.eui), 1);
 
@@ -840,16 +673,16 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
     <SectionCard>
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
             <BarChart3 size={13} />
             EUI Ranking
           </div>
 
-          <h2 className="text-lg font-black text-slate-950">
+          <h2 className="text-lg font-semibold text-slate-950">
             Building EUI Comparison
           </h2>
 
-          <p className="mt-1 text-sm font-bold text-slate-400">
+          <p className="mt-1 text-sm font-normal text-slate-400">
             Highest energy use per square meter.
           </p>
         </div>
@@ -860,9 +693,11 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
       </div>
 
       {topBuildings.length === 0 ? (
-        <div className="rounded-2xl border border-slate-100 bg-slate-50 p-6 text-center text-sm font-black text-slate-400">
-          No building EUI data yet.
-        </div>
+        <EmptyState
+          icon={BarChart3}
+          title="No building EUI data yet"
+          description="EUI is calculated from meter readings and floor area. Add both to compare buildings here."
+        />
       ) : (
         <div className="space-y-3">
           {topBuildings.map((item, index) => {
@@ -871,13 +706,13 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
             return (
               <div
                 key={item.building_id}
-                className="animate-[sectionRise_450ms_ease-out_both] rounded-[1.25rem] border border-slate-100 bg-slate-50 p-4 transition duration-300 hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-white hover:shadow-lg hover:shadow-slate-900/5"
+                className="animate-[sectionRise_450ms_ease-out_both] rounded-2xl border border-slate-100 bg-slate-50 p-4 transition duration-300 hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-white hover:shadow-md"
                 style={{ animationDelay: `${index * 75}ms` }}
               >
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
                     <div
-                      className={`grid h-9 w-9 shrink-0 place-items-center rounded-2xl text-xs font-black ${
+                      className={`grid h-9 w-9 shrink-0 place-items-center rounded-2xl text-xs font-medium ${
                         index === 0
                           ? "bg-emerald-700 text-white"
                           : "bg-white text-slate-500"
@@ -887,18 +722,18 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
                     </div>
 
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-slate-950">
+                      <p className="truncate text-sm font-semibold text-slate-950">
                         {item.building}
                       </p>
 
-                      <p className="mt-1 text-xs font-black text-slate-500">
-                        {formatDecimal(item.eui)} kWh/m² · {formatNumber(item.totalConsumption)} kWh
+                      <p className="mt-1 text-xs font-medium text-slate-500">
+                        {formatDecimal(item.eui)} kWh/m² · {formatNumber(item.totalConsumption)} kWh · {formatPeso(item.totalConsumption * rate, { decimals: 0 })}
                       </p>
                     </div>
                   </div>
 
                   <span
-                    className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-black ${getStatusClass(
+                    className={`shrink-0 rounded-full border px-3 py-1 text-[11px] font-medium ${getStatusClass(
                       item.status
                     )}`}
                   >
@@ -923,7 +758,7 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage }) {
       <button
         type="button"
         onClick={() => setCurrentPage && setCurrentPage("analytics")}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
       >
         View analytics
         <ArrowRight size={16} />
@@ -939,7 +774,12 @@ function OcrStatusCard({
   lowAccuracyReadings,
   setCurrentPage,
 }) {
-  const accuracy = Math.max(0, Math.min(100, Number(averageOcrAccuracy || 0)));
+  // null when every reading was typed in by hand, so there is no score to show.
+  const hasScores =
+    averageOcrAccuracy !== null && averageOcrAccuracy !== undefined;
+  const accuracy = hasScores
+    ? Math.max(0, Math.min(100, Number(averageOcrAccuracy)))
+    : 0;
   const circumference = 2 * Math.PI * 42;
   const dashOffset = circumference - (accuracy / 100) * circumference;
   const needsReview = pendingReadings.length + lowAccuracyReadings.length;
@@ -948,16 +788,16 @@ function OcrStatusCard({
     <SectionCard>
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
             <ScanLine size={13} />
             OCR Monitor
           </div>
 
-          <h2 className="text-lg font-black text-slate-950">
+          <h2 className="text-lg font-semibold text-slate-950">
             OCR Reading Status
           </h2>
 
-          <p className="mt-1 text-sm font-bold text-slate-400">
+          <p className="mt-1 text-sm font-normal text-slate-400">
             Accuracy and verification state.
           </p>
         </div>
@@ -967,7 +807,7 @@ function OcrStatusCard({
         </div>
       </div>
 
-      <div className="rounded-[1.4rem] border border-emerald-100 bg-emerald-50/60 p-4">
+      <div className="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
         <div className="flex items-center gap-4">
           <div className="relative h-24 w-24 shrink-0">
             <svg viewBox="0 0 108 108" className="h-24 w-24 -rotate-90">
@@ -995,8 +835,10 @@ function OcrStatusCard({
 
             <div className="absolute inset-0 grid place-items-center text-center">
               <div>
-                <p className="text-2xl font-black text-slate-950">{accuracy}%</p>
-                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-400">
+                <p className="text-2xl font-bold text-slate-950">
+                  {hasScores ? `${accuracy}%` : "—"}
+                </p>
+                <p className="text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                   Accuracy
                 </p>
               </div>
@@ -1004,11 +846,11 @@ function OcrStatusCard({
           </div>
 
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-black text-slate-950">
+            <p className="text-sm font-semibold text-slate-950">
               {needsReview > 0 ? "Needs Review" : "All Clear"}
             </p>
 
-            <p className="mt-1 text-xs font-bold leading-5 text-slate-500">
+            <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
               {needsReview > 0
                 ? `${needsReview} reading${needsReview > 1 ? "s" : ""} require attention.`
                 : "All OCR readings are currently verified."}
@@ -1019,22 +861,22 @@ function OcrStatusCard({
 
       <div className="mt-4 grid grid-cols-3 gap-3">
         <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
-          <p className="text-[11px] font-black text-emerald-700">Verified</p>
-          <p className="mt-1 text-2xl font-black text-emerald-700">
+          <p className="text-[11px] font-medium text-emerald-700">Verified</p>
+          <p className="mt-1 text-2xl font-bold text-emerald-700">
             {verifiedReadings.length}
           </p>
         </div>
 
         <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3">
-          <p className="text-[11px] font-black text-amber-700">Pending</p>
-          <p className="mt-1 text-2xl font-black text-amber-600">
+          <p className="text-[11px] font-medium text-amber-700">Pending</p>
+          <p className="mt-1 text-2xl font-bold text-amber-600">
             {pendingReadings.length}
           </p>
         </div>
 
         <div className="rounded-2xl border border-red-100 bg-red-50 p-3">
-          <p className="text-[11px] font-black text-red-700">Low Acc.</p>
-          <p className="mt-1 text-2xl font-black text-red-700">
+          <p className="text-[11px] font-medium text-red-700">Low Acc.</p>
+          <p className="mt-1 text-2xl font-bold text-red-700">
             {lowAccuracyReadings.length}
           </p>
         </div>
@@ -1043,128 +885,11 @@ function OcrStatusCard({
       <button
         type="button"
         onClick={() => setCurrentPage && setCurrentPage("ocr")}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-3 text-sm font-black text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-800 hover:shadow-lg hover:shadow-emerald-900/15"
+        className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-800 hover:shadow-md"
       >
         Open OCR Upload
         <ChevronRight size={17} />
       </button>
-    </SectionCard>
-  );
-}
-
-function ReportsAuditCard({ setCurrentPage, readings, buildings, meters }) {
-  const actions = [
-    {
-      title: "Generate Report",
-      subtitle: `${readings.length} saved readings ready`,
-      icon: FileDown,
-      page: "reports",
-      className: "bg-emerald-700 text-white",
-    },
-    {
-      title: "Manage Buildings",
-      subtitle: `${buildings.length} buildings registered`,
-      icon: Building2,
-      page: "buildings",
-      className: "bg-emerald-50 text-emerald-700",
-    },
-    {
-      title: "Manage Meters",
-      subtitle: `${meters.length} meters assigned`,
-      icon: Gauge,
-      page: "meters",
-      className: "bg-lime-100 text-emerald-800",
-    },
-  ];
-
-  return (
-    <SectionCard>
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">
-            <ClipboardCheck size={13} />
-            Audit Center
-          </div>
-
-          <h2 className="text-lg font-black text-slate-950">Reports & Audit</h2>
-
-          <p className="mt-1 text-sm font-bold text-slate-400">
-            Export, review, and manage records.
-          </p>
-        </div>
-
-        <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-slate-950 text-white shadow-sm">
-          <FileText size={23} />
-        </div>
-      </div>
-
-      <div className="mb-4 grid grid-cols-3 gap-2 rounded-[1.25rem] border border-slate-100 bg-slate-50 p-3">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
-            Readings
-          </p>
-          <p className="mt-1 text-xl font-black text-slate-950">{readings.length}</p>
-        </div>
-
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
-            Buildings
-          </p>
-          <p className="mt-1 text-xl font-black text-slate-950">{buildings.length}</p>
-        </div>
-
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-400">
-            Meters
-          </p>
-          <p className="mt-1 text-xl font-black text-slate-950">{meters.length}</p>
-        </div>
-      </div>
-
-      <div className="space-y-3">
-        {actions.map((item, index) => {
-          const Icon = item.icon;
-
-          return (
-            <button
-              key={item.title}
-              type="button"
-              onClick={() => setCurrentPage && setCurrentPage(item.page)}
-              className="animate-[sectionRise_450ms_ease-out_both] group flex w-full items-center justify-between gap-3 rounded-[1.25rem] border border-slate-100 bg-slate-50 p-3 text-left transition duration-300 hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-white hover:shadow-lg hover:shadow-slate-900/5"
-              style={{ animationDelay: `${index * 75}ms` }}
-            >
-              <div className="flex min-w-0 items-center gap-3">
-                <div
-                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ${item.className}`}
-                >
-                  <Icon size={20} />
-                </div>
-
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-black text-slate-950">
-                    {item.title}
-                  </p>
-
-                  <p className="mt-1 truncate text-xs font-bold text-slate-500">
-                    {item.subtitle}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white text-slate-400 transition group-hover:bg-emerald-700 group-hover:text-white">
-                <ChevronRight size={16} />
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3">
-        <p className="text-xs font-black text-emerald-700">System audit ready</p>
-        <p className="mt-1 text-xs font-bold leading-5 text-slate-500">
-          Reports use current saved readings, buildings, and meter assignments.
-        </p>
-      </div>
     </SectionCard>
   );
 }
@@ -1174,6 +899,7 @@ export default function Dashboard({ role, setCurrentPage }) {
   const [meters, setMeters] = useState([]);
   const [readings, setReadings] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
   const [toast, setToast] = useState({
     message: "",
     type: "success",
@@ -1232,7 +958,9 @@ export default function Dashboard({ role, setCurrentPage }) {
 
       setBuildings(buildingData);
       setMeters(meterData);
-      setReadings(readingData);
+      // Coverage lets status be annualised the same way Analytics, Reports and
+      // the GIS map do it.
+      setReadings(annotateReadingCoverage(readingData));
     } catch (error) {
       console.error("Dashboard refresh error:", error);
       showToast(
@@ -1253,6 +981,9 @@ export default function Dashboard({ role, setCurrentPage }) {
       runOnMount: true,
     }
   );
+
+  // Rate loading moved to a shared hook so a failure is visible instead of
+  // silently pricing everything at the ₱12 default.
 
   function getBuildingName(buildingId) {
     const building = buildings.find(
@@ -1284,16 +1015,17 @@ export default function Dashboard({ role, setCurrentPage }) {
           0
         );
 
-        const eui = computeEui(totalConsumption, building.floor_area);
+        // Annualised over the days the readings cover. This page used to grade
+        // cumulative intensity, which only grows as history accumulates, so after
+        // a year or two every building drifted into Critical here while Analytics
+        // and the GIS map still showed it Normal.
+        const spanDays = getReadingSpanDays(buildingReadings);
+        const eui = annualizeEui(
+          computeEui(totalConsumption, building.floor_area),
+          spanDays
+        );
 
-        const averageAccuracy = buildingReadings.length
-          ? Math.round(
-              buildingReadings.reduce(
-                (sum, reading) => sum + Number(reading.ocr_accuracy || 0),
-                0
-              ) / buildingReadings.length
-            )
-          : 0;
+        const averageAccuracy = getAverageOcrAccuracy(buildingReadings);
 
         const verifiedCount = buildingReadings.filter(
           (reading) => reading.is_verified
@@ -1303,11 +1035,17 @@ export default function Dashboard({ role, setCurrentPage }) {
           (reading) => !reading.is_verified
         ).length;
 
-        const status = getEnergyStatus(totalConsumption, building.floor_area);
+        const status = getEnergyStatus(
+          totalConsumption,
+          building.floor_area,
+          spanDays
+        );
 
         return {
           building_id: building.building_id,
           building: building.name,
+          latitude: building.latitude,
+          longitude: building.longitude,
           floorArea: building.floor_area,
           meterCount: buildingMeters.length,
           readingCount: buildingReadings.length,
@@ -1322,39 +1060,43 @@ export default function Dashboard({ role, setCurrentPage }) {
       .sort((a, b) => b.eui - a.eui);
   }, [buildings, meters, readings]);
 
+  // Grouped by calendar month AND year. This used to bucket into a fixed Jan-Dec
+  // array keyed on the bare month name, so September 2025 and September 2026 were
+  // summed into the same bar and the chart silently misreported history spanning
+  // more than a year.
+  //
+  // The lucide "Map" icon is imported as MapIcon rather than Map: importing it
+  // under its own name shadows the global Map constructor, which is what made an
+  // earlier version of this block throw "Map is not a constructor".
   const monthlyConsumption = useMemo(() => {
-    const monthOrder = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-
-    const grouped = monthOrder.reduce((result, month) => {
-      result[month] = 0;
-      return result;
-    }, {});
+    const grouped = {};
 
     readings.forEach((reading) => {
-      const month = getMonthName(reading.reading_date);
+      const date = new Date(reading.reading_date);
 
-      if (grouped[month] !== undefined) {
-        grouped[month] += reading.differential;
+      if (Number.isNaN(date.getTime())) {
+        return;
       }
+
+      const sortKey = `${date.getFullYear()}-${String(
+        date.getMonth() + 1
+      ).padStart(2, "0")}`;
+
+      if (grouped[sortKey]) {
+        grouped[sortKey].value += reading.differential;
+        return;
+      }
+
+      grouped[sortKey] = {
+        sortKey,
+        month: `${MONTH_LABELS[date.getMonth()]} ${date.getFullYear()}`,
+        value: reading.differential,
+      };
     });
 
-    return monthOrder.map((month) => ({
-      month,
-      value: grouped[month],
-    }));
+    return Object.values(grouped).sort((a, b) =>
+      a.sortKey.localeCompare(b.sortKey)
+    );
   }, [readings]);
 
   const totalConsumption = readings.reduce(
@@ -1362,24 +1104,18 @@ export default function Dashboard({ role, setCurrentPage }) {
     0
   );
 
+  const totalCost = totalConsumption * rate;
+
   const mappedBuildings = buildings.filter(
     (building) => building.latitude && building.longitude
   );
 
   const pendingReadings = readings.filter((reading) => !reading.is_verified);
   const verifiedReadings = readings.filter((reading) => reading.is_verified);
-  const lowAccuracyReadings = readings.filter(
-    (reading) => Number(reading.ocr_accuracy || 0) < 90
-  );
+  // Photo readings only: a typed-in reading has no OCR score to be low.
+  const lowAccuracyReadings = readings.filter(isLowOcrAccuracy);
 
-  const averageOcrAccuracy = readings.length
-    ? Math.round(
-        readings.reduce(
-          (sum, reading) => sum + Number(reading.ocr_accuracy || 0),
-          0
-        ) / readings.length
-      )
-    : 0;
+  const averageOcrAccuracy = getAverageOcrAccuracy(readings);
 
   const averageEui = buildingAnalytics.length
     ? buildingAnalytics.reduce((sum, building) => sum + Number(building.eui), 0) /
@@ -1406,20 +1142,6 @@ export default function Dashboard({ role, setCurrentPage }) {
       percentage,
     };
   });
-
-  const mapMarkerPositions = [
-    "left-[15%] top-[21%]",
-    "left-[53%] top-[17%]",
-    "right-[16%] top-[25%]",
-    "left-[25%] bottom-[20%]",
-    "right-[23%] bottom-[21%]",
-    "left-[50%] bottom-[34%]",
-  ];
-
-  const mapBuildings = buildingAnalytics.slice(0, 6).map((building, index) => ({
-    ...building,
-    position: mapMarkerPositions[index % mapMarkerPositions.length],
-  }));
 
   const mapStatusSummary = buildingAnalytics.reduce(
     (summary, building) => {
@@ -1449,7 +1171,7 @@ export default function Dashboard({ role, setCurrentPage }) {
     {
       title: "Total Usage",
       value: formatNumber(totalConsumption),
-      subtitle: "kWh · total from saved readings",
+      subtitle: `kWh · ≈ ${formatPeso(totalCost, { decimals: 0 })} estimated bill`,
       icon: Zap,
       color: "emerald",
     },
@@ -1490,6 +1212,8 @@ export default function Dashboard({ role, setCurrentPage }) {
         intervalMs={AUTO_REFRESH_MS}
       />
 
+      <RateNotice isFallback={isRateFallback} error={rateError} />
+
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {overviewCards.map((card) => (
           <StatCard key={card.title} {...card} />
@@ -1497,14 +1221,14 @@ export default function Dashboard({ role, setCurrentPage }) {
       </section>
 
       <section className="grid gap-5 lg:grid-cols-[1.7fr_1fr]">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-lg font-black text-slate-950">
+              <h2 className="text-lg font-semibold text-slate-950">
                 Energy Consumption Trend
               </h2>
 
-              <p className="mt-1 text-sm font-bold text-slate-400">
+              <p className="mt-1 text-sm font-normal text-slate-400">
                 Monthly usage from saved meter readings.
               </p>
             </div>
@@ -1512,7 +1236,7 @@ export default function Dashboard({ role, setCurrentPage }) {
             <button
               type="button"
               onClick={() => setCurrentPage && setCurrentPage("analytics")}
-              className="w-full rounded-[18px] bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 sm:w-auto"
+              className="w-full rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 sm:w-auto"
             >
               View Analytics
             </button>
@@ -1524,14 +1248,14 @@ export default function Dashboard({ role, setCurrentPage }) {
           />
         </div>
 
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-start justify-between gap-3">
             <div>
-              <h2 className="text-lg font-black text-slate-950">
+              <h2 className="text-lg font-semibold text-slate-950">
                 GIS Energy Map
               </h2>
 
-              <p className="mt-1 text-sm font-bold text-slate-400">
+              <p className="mt-1 text-sm font-normal text-slate-400">
                 Building EUI status preview.
               </p>
             </div>
@@ -1540,95 +1264,41 @@ export default function Dashboard({ role, setCurrentPage }) {
           </div>
 
           <div className="mb-4 grid grid-cols-3 gap-2">
-            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700">
+            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
               <Database size={14} />
               {mappedBuildings.length} Mapped
             </div>
 
-            <div className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-black text-red-700">
+            <div className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
               <AlertTriangle size={14} />
               {mapStatusSummary.critical} Critical
             </div>
 
-            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700">
+            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
               <TrendingUp size={14} />
               EUI {formatDecimal(averageEui)}
             </div>
           </div>
 
-          <div className="relative h-[315px] overflow-hidden rounded-[22px] border border-emerald-100 bg-gradient-to-br from-emerald-50 via-teal-50 to-lime-50">
-            <div className="absolute inset-0 opacity-80 bg-[linear-gradient(90deg,rgba(4,120,87,0.11)_1px,transparent_1px),linear-gradient(rgba(4,120,87,0.11)_1px,transparent_1px)] bg-[size:38px_38px]" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_25%_25%,rgba(16,185,129,0.22),transparent_28%),radial-gradient(circle_at_70%_35%,rgba(132,204,22,0.18),transparent_30%),radial-gradient(circle_at_68%_72%,rgba(15,118,110,0.12),transparent_28%)]" />
-            <div className="absolute left-[10%] top-0 h-full w-16 rotate-12 bg-white/20" />
-            <div className="absolute right-[18%] top-[-10%] h-[120%] w-12 -rotate-12 bg-white/15" />
-            <div className="absolute bottom-[18%] left-0 h-10 w-full -rotate-12 bg-white/15" />
-
-            {mapBuildings.length === 0 ? (
-              <div className="absolute inset-0 grid place-items-center p-6 text-center">
-                <div>
-                  <Building2 className="mx-auto text-emerald-700" size={38} />
-
-                  <p className="mt-3 text-sm font-black text-slate-700">
-                    No building map data yet
-                  </p>
-
-                  <p className="mt-1 text-xs font-bold text-slate-500">
-                    Add buildings and readings to show status markers.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              mapBuildings.map((building, index) => {
-                const markerStyle = getMapMarkerStyle(building.status);
-
-                return (
-                  <div
-                    key={`${building.building_id}-${building.building}`}
-                    className={`absolute ${building.position} group grid h-14 w-14 place-items-center`}
-                    title={`${building.building} - ${building.status}`}
-                  >
-                    <span
-                      className={`absolute h-20 w-20 rounded-full blur-xl ${markerStyle.glow} animate-[mapGlow_2.8s_ease-in-out_infinite]`}
-                      style={{ animationDelay: `${index * 180}ms`, willChange: "transform, opacity" }}
-                    />
-
-                    <span
-                      className={`absolute h-16 w-16 rounded-full border-2 ${markerStyle.pulse} animate-[mapPulse_2.6s_ease-out_infinite]`}
-                      style={{ animationDelay: `${index * 220}ms`, willChange: "transform, opacity" }}
-                    />
-
-                    <div
-                      className={`relative z-10 grid h-12 w-12 place-items-center rounded-[1.15rem] border-[3px] border-white shadow-xl transition duration-300 group-hover:-translate-y-1 group-hover:scale-105 ${markerStyle.shell}`}
-                    >
-                      {building.status === "Critical" ? (
-                        <AlertTriangle size={21} />
-                      ) : (
-                        <Building2 size={21} />
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+          <MiniEnergyMap buildings={buildingAnalytics} height={315} />
 
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 sm:grid-cols-4">
-            <span className="flex items-center justify-center gap-2 text-xs font-black text-slate-600">
+            <span className="flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
               <span className="h-2.5 w-2.5 rounded-full bg-emerald-600" />
               Normal
             </span>
 
-            <span className="flex items-center justify-center gap-2 text-xs font-black text-slate-600">
+            <span className="flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
               <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
               High
             </span>
 
-            <span className="flex items-center justify-center gap-2 text-xs font-black text-slate-600">
+            <span className="flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
               <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
               Critical
             </span>
 
-            <span className="flex items-center justify-center gap-2 text-xs font-black text-slate-600">
+            <span className="flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
               <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
               No Data
             </span>
@@ -1637,9 +1307,9 @@ export default function Dashboard({ role, setCurrentPage }) {
           <button
             type="button"
             onClick={() => setCurrentPage && setCurrentPage("map")}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-black text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
           >
-            <Map size={17} />
+            <MapIcon size={17} />
             Open Building Map
           </button>
         </div>
@@ -1649,10 +1319,11 @@ export default function Dashboard({ role, setCurrentPage }) {
         <EnergyForecastCard monthlyConsumption={monthlyConsumption} />
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[1.2fr_1fr_1fr]">
+      <section className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
         <EuiComparisonCard
           buildingComparison={buildingComparison}
           setCurrentPage={setCurrentPage}
+          rate={rate}
         />
 
         <OcrStatusCard
@@ -1662,24 +1333,17 @@ export default function Dashboard({ role, setCurrentPage }) {
           lowAccuracyReadings={lowAccuracyReadings}
           setCurrentPage={setCurrentPage}
         />
-
-        <ReportsAuditCard
-          setCurrentPage={setCurrentPage}
-          readings={readings}
-          buildings={buildings}
-          meters={meters}
-        />
       </section>
 
-      <section className="grid gap-5 lg:grid-cols-[1fr_1fr]">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+      <section>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-black text-slate-950">
+              <h2 className="text-lg font-semibold text-slate-950">
                 Latest Meter Readings
               </h2>
 
-              <p className="mt-1 text-sm font-bold text-slate-400">
+              <p className="mt-1 text-sm font-normal text-slate-400">
                 Recently saved readings.
               </p>
             </div>
@@ -1688,11 +1352,24 @@ export default function Dashboard({ role, setCurrentPage }) {
           </div>
 
           {latestReadings.length === 0 ? (
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-6 text-center text-sm font-black text-slate-400">
-              No readings available yet.
-            </div>
+            <EmptyState
+              icon={Clock3}
+              title="No readings yet"
+              description="Saved meter readings show up here as soon as the first one is recorded."
+              action={
+                setCurrentPage ? (
+                  <HeaderActionButton
+                    icon={ScanLine}
+                    variant="dark"
+                    onClick={() => setCurrentPage("ocr")}
+                  >
+                    Add Meter Reading
+                  </HeaderActionButton>
+                ) : null
+              }
+            />
           ) : (
-            <div className="space-y-3">
+            <div className="grid gap-3 lg:grid-cols-2">
               {latestReadings.map((reading) => {
                 const meter = getMeter(reading.meter_id);
                 const buildingName = meter
@@ -1705,23 +1382,23 @@ export default function Dashboard({ role, setCurrentPage }) {
                     className="flex items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-4"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-slate-950">
+                      <p className="truncate text-sm font-semibold text-slate-950">
                         {buildingName}
                       </p>
 
-                      <p className="mt-1 text-xs font-bold text-slate-500">
+                      <p className="mt-1 text-xs font-normal text-slate-500">
                         Meter: {meter?.serial_no || reading.meter_id} ·{" "}
                         {getRelativeDate(reading.reading_date)}
                       </p>
                     </div>
 
                     <div className="text-right">
-                      <p className="text-sm font-black text-slate-950">
+                      <p className="text-sm font-semibold text-slate-950">
                         {formatNumber(reading.reading_value)} kWh
                       </p>
 
                       <span
-                        className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-black ${getStatusClass(
+                        className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getStatusClass(
                           reading.is_verified ? "Verified" : "Pending"
                         )}`}
                       >
@@ -1735,102 +1412,10 @@ export default function Dashboard({ role, setCurrentPage }) {
           )}
         </div>
 
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-black text-slate-950">
-                System Health
-              </h2>
-
-              <p className="mt-1 text-sm font-bold text-slate-400">
-                Current backend summary.
-              </p>
-            </div>
-
-            <CheckCircle2 size={22} className="text-emerald-700" />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black text-slate-400">
-                Active Buildings
-              </p>
-
-              <p className="mt-2 text-2xl font-black text-slate-950">
-                {
-                  buildings.filter(
-                    (building) =>
-                      String(building.status).toLowerCase() === "active"
-                  ).length
-                }
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black text-slate-400">
-                Active Meters
-              </p>
-
-              <p className="mt-2 text-2xl font-black text-slate-950">
-                {
-                  meters.filter(
-                    (meter) => String(meter.status).toLowerCase() === "active"
-                  ).length
-                }
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black text-slate-400">
-                Mapped Buildings
-              </p>
-
-              <p className="mt-2 text-2xl font-black text-emerald-700">
-                {mappedBuildings.length}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black text-slate-400">
-                Saved Readings
-              </p>
-
-              <p className="mt-2 text-2xl font-black text-emerald-700">
-                {readings.length}
-              </p>
-            </div>
-          </div>
-        </div>
       </section>
 
       <style>
         {`
-          @keyframes mapPulse {
-            0% {
-              opacity: 0.75;
-              transform: scale(0.78);
-            }
-            70% {
-              opacity: 0;
-              transform: scale(1.35);
-            }
-            100% {
-              opacity: 0;
-              transform: scale(1.35);
-            }
-          }
-
-          @keyframes mapGlow {
-            0%, 100% {
-              opacity: 0.55;
-              transform: scale(0.96);
-            }
-            50% {
-              opacity: 1;
-              transform: scale(1.08);
-            }
-          }
-
           @keyframes sectionRise {
             from {
               opacity: 0;

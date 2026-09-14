@@ -12,6 +12,8 @@ import {
 
 import PageHeader from "../components/PageHeader";
 import ConfirmationModal from "../components/ConfirmationModal";
+import StatCard from "../components/StatCard";
+import { clearSavedLogin } from "../utils/session";
 
 const roleAccess = {
   Admin: [
@@ -109,11 +111,11 @@ function InfoCard({ label, value, icon: Icon }) {
         </div>
 
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
             {label}
           </p>
 
-          <p className="mt-1 break-words text-lg font-black text-slate-950">
+          <p className="mt-1 break-words text-lg font-semibold text-slate-950">
             {value || "Not available"}
           </p>
         </div>
@@ -122,50 +124,7 @@ function InfoCard({ label, value, icon: Icon }) {
   );
 }
 
-function ProfileStatCard({ title, value, description, icon: Icon, tone = "dark" }) {
-  const toneClass =
-    tone === "green"
-      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-      : tone === "blue"
-      ? "border-blue-100 bg-blue-50 text-blue-700"
-      : tone === "purple"
-      ? "border-purple-100 bg-purple-50 text-purple-700"
-      : tone === "amber"
-      ? "border-amber-100 bg-amber-50 text-amber-700"
-      : "border-slate-200 bg-white text-slate-950";
-
-  const iconClass =
-    tone === "green"
-      ? "bg-emerald-700 text-white"
-      : tone === "blue"
-      ? "bg-blue-600 text-white"
-      : tone === "purple"
-      ? "bg-purple-600 text-white"
-      : tone === "amber"
-      ? "bg-amber-500 text-white"
-      : "bg-slate-950 text-lime-300";
-
-  return (
-    <div className={`rounded-[1.7rem] border p-5 shadow-sm ${toneClass}`}>
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm font-black opacity-80">{title}</p>
-          <p className="mt-2 break-words text-2xl font-black leading-tight">
-            {value}
-          </p>
-        </div>
-
-        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${iconClass}`}>
-          <Icon size={23} />
-        </div>
-      </div>
-
-      <p className="text-xs font-bold leading-5 opacity-75">{description}</p>
-    </div>
-  );
-}
-
-const ProfilePage = ({ user, role, onLogout }) => {
+const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
   const storedUser = getStoredUser();
   const currentUser = user || storedUser || {};
   const currentRole = role || currentUser?.role || "Staff";
@@ -180,8 +139,9 @@ const ProfilePage = ({ user, role, onLogout }) => {
   }, [currentUser?.full_name, currentUser?.username]);
 
   function handleSignOut() {
-    localStorage.removeItem("token");
-    localStorage.removeItem("user");
+    // This used to remove only "token" and "user", leaving a stale role and
+    // fullName behind after sign-out.
+    clearSavedLogin();
 
     if (typeof onLogout === "function") {
       onLogout();
@@ -192,7 +152,7 @@ const ProfilePage = ({ user, role, onLogout }) => {
   }
 
   return (
-    <div className="space-y-6 font-[Nunito]">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="User Profile"
         title={currentUser?.full_name || "System User"}
@@ -200,20 +160,21 @@ const ProfilePage = ({ user, role, onLogout }) => {
         icon={User}
         status={`Status: ${currentStatus}`}
       >
-        <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-black text-white">
+        <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium leading-none text-slate-600">
           Role: {currentRole}
         </span>
       </PageHeader>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <ProfileStatCard
+        <StatCard
           title="Account"
           value={currentUser?.username || "User"}
           description="Signed-in account username"
           icon={User}
+          compactValue
         />
 
-        <ProfileStatCard
+        <StatCard
           title="Role"
           value={currentRole}
           description="Assigned system access level"
@@ -225,9 +186,10 @@ const ProfilePage = ({ user, role, onLogout }) => {
               ? "blue"
               : "green"
           }
+          compactValue
         />
 
-        <ProfileStatCard
+        <StatCard
           title="Status"
           value={currentStatus}
           description="Current account approval state"
@@ -239,9 +201,10 @@ const ProfilePage = ({ user, role, onLogout }) => {
               ? "amber"
               : "dark"
           }
+          compactValue
         />
 
-        <ProfileStatCard
+        <StatCard
           title="Permissions"
           value={accessList.length}
           description="Available role permissions"
@@ -251,17 +214,17 @@ const ProfilePage = ({ user, role, onLogout }) => {
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex items-center gap-4">
-            <div className="grid h-16 w-16 shrink-0 place-items-center rounded-[1.4rem] bg-gradient-to-br from-emerald-700 to-lime-400 text-xl font-black text-white shadow-lg shadow-emerald-900/20">
+            <div className="grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-emerald-700 to-lime-400 text-xl font-semibold text-white shadow-md">
               {accountInitials}
             </div>
 
             <div className="min-w-0">
-              <h2 className="text-xl font-black text-slate-950">
+              <h2 className="text-xl font-semibold text-slate-950">
                 Account Information
               </h2>
-              <p className="mt-1 text-sm font-bold text-slate-500">
+              <p className="mt-1 text-sm font-normal text-slate-500">
                 Basic profile details stored in the system.
               </p>
             </div>
@@ -292,32 +255,32 @@ const ProfilePage = ({ user, role, onLogout }) => {
           </div>
         </div>
 
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mb-6 flex items-center gap-3">
             <div className={`grid h-12 w-12 place-items-center rounded-2xl ${tone.icon}`}>
               <ShieldCheck size={24} />
             </div>
 
             <div>
-              <h2 className="text-xl font-black text-slate-950">
+              <h2 className="text-xl font-semibold text-slate-950">
                 Role Permissions
               </h2>
-              <p className="mt-1 text-sm font-bold text-slate-500">
+              <p className="mt-1 text-sm font-normal text-slate-500">
                 Available pages and actions for this account.
               </p>
             </div>
           </div>
 
-          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-[1.5rem] border border-slate-100 bg-slate-50 p-4">
-            <span className={`rounded-full border px-3 py-1 text-xs font-black ${tone.badge}`}>
+          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+            <span className={`rounded-full border px-3 py-1 text-xs font-medium ${tone.badge}`}>
               {currentRole}
             </span>
 
-            <span className={`rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(currentStatus)}`}>
+            <span className={`rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(currentStatus)}`}>
               {currentStatus}
             </span>
 
-            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-black text-slate-600">
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
               {accessList.length} permissions
             </span>
           </div>
@@ -332,7 +295,7 @@ const ProfilePage = ({ user, role, onLogout }) => {
                   <CheckCircle2 size={18} />
                 </div>
 
-                <p className="text-sm font-black text-slate-700">{access}</p>
+                <p className="text-sm font-semibold text-slate-700">{access}</p>
               </div>
             ))}
           </div>
@@ -340,20 +303,37 @@ const ProfilePage = ({ user, role, onLogout }) => {
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1fr_380px]">
-        <div className="rounded-[1.7rem] border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex items-start gap-3">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-slate-950 text-lime-300">
               <KeyRound size={23} />
             </div>
 
             <div>
-              <h2 className="text-xl font-black text-slate-950">
+              <h2 className="text-xl font-semibold text-slate-950">
                 Account Security
               </h2>
 
-              <p className="mt-1 text-sm font-bold leading-6 text-slate-500">
-                Account access is managed by the administrator. Password update can be connected to the backend later.
+              {/* This card used to say password update "can be connected to the
+                  backend later". It was already connected: PUT /auth/me verifies
+                  the current password and accepts a new one for any signed-in
+                  user. The only problem was that the page holding that form was
+                  Admin-only, so Managers and Staff could never reach it. */}
+              <p className="mt-1 text-sm font-normal leading-6 text-slate-500">
+                Change your name, username, or password from Settings. You will
+                need your current password to set a new one.
               </p>
+
+              {typeof setCurrentPage === "function" && (
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage("settings")}
+                  className="mt-4 inline-flex items-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                >
+                  <KeyRound size={17} />
+                  Open account settings
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -361,7 +341,7 @@ const ProfilePage = ({ user, role, onLogout }) => {
         <button
           type="button"
           onClick={() => setShowSignOutModal(true)}
-          className="group flex items-center justify-between gap-4 rounded-[1.7rem] border border-red-100 bg-white p-6 text-left shadow-sm transition hover:border-red-200 hover:bg-red-50"
+          className="group flex items-center justify-between gap-4 rounded-2xl border border-red-100 bg-white p-6 text-left shadow-sm transition hover:border-red-200 hover:bg-red-50"
         >
           <div className="flex min-w-0 items-center gap-4">
             <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-red-600 text-white transition group-hover:bg-red-700">
@@ -369,11 +349,11 @@ const ProfilePage = ({ user, role, onLogout }) => {
             </div>
 
             <div className="min-w-0">
-              <h2 className="text-xl font-black text-slate-950 group-hover:text-red-900">
+              <h2 className="text-xl font-semibold text-slate-950 group-hover:text-red-900">
                 Sign Out
               </h2>
 
-              <p className="mt-1 text-sm font-bold text-slate-500 group-hover:text-red-700">
+              <p className="mt-1 text-sm font-normal text-slate-500 group-hover:text-red-700">
                 End current session.
               </p>
             </div>

@@ -11,8 +11,14 @@ const ToastMessage = ({ message, type = "success", onClose }) => {
 
   const toastContent = (
     <div className="pointer-events-none fixed right-6 top-6 z-[70000] w-[360px] max-w-[calc(100vw-3rem)] animate-fade-in">
+      {/* Announced to screen readers. Every success and error in the app surfaces
+          through here and none of it was announced, so a non-sighted user got no
+          feedback at all from an action, and the message vanishes after 2.5s.
+          role="alert" is assertive for errors; "status" is polite for successes. */}
       <div
-        className={`pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-2xl shadow-slate-950/15 ${
+        role={isError ? "alert" : "status"}
+        aria-live={isError ? "assertive" : "polite"}
+        className={`pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-xl ${
           isError
             ? "border-red-100 bg-red-50 text-red-800"
             : "border-emerald-100 bg-emerald-50 text-emerald-800"
@@ -27,11 +33,11 @@ const ToastMessage = ({ message, type = "success", onClose }) => {
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-black leading-tight">
+          <p className="text-sm font-semibold leading-tight">
             {isError ? "Something went wrong" : "Success"}
           </p>
 
-          <p className="mt-1 text-sm font-bold leading-5 opacity-85">
+          <p className="mt-1 text-sm font-normal leading-5 opacity-85">
             {message}
           </p>
         </div>
@@ -40,7 +46,7 @@ const ToastMessage = ({ message, type = "success", onClose }) => {
           type="button"
           onClick={onClose}
           aria-label="Close notification"
-          className="shrink-0 rounded-lg p-1.5 opacity-70 transition hover:bg-white/70 hover:opacity-100"
+          className="shrink-0 rounded-xl p-1.5 opacity-70 transition hover:bg-white/70 hover:opacity-100"
         >
           <X size={16} />
         </button>

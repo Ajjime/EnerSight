@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -6,58 +6,82 @@ import {
   CheckCircle2,
   Eye,
   Flame,
-  LocateFixed,
+  Map as MapIcon,
   MapPinned,
+  Minus,
   Navigation,
+  Plus,
+  Satellite,
+  Scan,
   Search,
   X,
   Zap,
 } from "lucide-react";
-import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, Marker, TileLayer, Tooltip } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
 import PageHeader from "../components/PageHeader";
 import HeaderActionButton from "../components/HeaderActionButton";
+import StatCard from "../components/StatCard";
+import EmptyState from "../components/EmptyState";
+import SkeletonRows from "../components/SkeletonRows";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
+import { formatDecimal, formatNumber } from "../utils/format";
+import { getAverageOcrAccuracy, getOcrScore } from "../utils/readingQuality";
+import {
+  ENERGY_STATUS_OPTIONS,
+  EUI_CRITICAL_THRESHOLD,
+  EUI_HIGH_THRESHOLD,
+  computeEui,
+  getEnergyStatus,
+} from "../utils/energyStatus";
 const AUTO_REFRESH_MS = 30000;
 
 const DEFAULT_CENTER = [7.3019, 125.6852];
-const STATUS_OPTIONS = ["All Status", "Normal", "High", "Critical", "No Data"];
+const DEFAULT_ZOOM = 16;
+const FOCUS_ZOOM = 18;
+const MAP_MAX_ZOOM = 20;
+const STATUS_FILTERS = ["All", ...ENERGY_STATUS_OPTIONS];
 
-function computeEui(totalConsumption, floorArea) {
-  const consumption = Number(totalConsumption || 0);
-  const area = Number(floorArea || 0);
+// Worst first, so the building that most needs attention tops the list and is the
+// one selected when the page opens.
+const STATUS_RANK = { Critical: 0, High: 1, Normal: 2, "No Data": 3 };
 
-  if (consumption <= 0 || area <= 0) {
-    return 0;
-  }
+// OpenStreetMap's default style paints roads orange and yellow and scatters shop
+// and church icons everywhere, which drowned out the status markers. The muted
+// hosted styles (CARTO, Stadia) stamp "API KEY REQUIRED" over their tiles without
+// an account, so these stay OSM tiles and `energy-street-tiles` in index.css tones
+// them down. The filter sits on the tile layer only, so pin colours stay true.
+// Satellite imagery is for checking that a pin actually sits on the right roof.
+const BASE_LAYERS = {
+  map: {
+    label: "Map",
+    icon: MapIcon,
+    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    className: "energy-street-tiles",
+    maxNativeZoom: 19,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  },
+  satellite: {
+    label: "Satellite",
+    icon: Satellite,
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    // Imagery past z18 is patchy in Mindanao, so deeper zooms upscale z18 tiles
+    // instead of showing "Map data not yet available" squares.
+    maxNativeZoom: 18,
+    attribution:
+      "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+  },
+};
 
-  return consumption / area;
-}
-
-function getEnergyStatus(totalConsumption, floorArea) {
-  const consumption = Number(totalConsumption || 0);
-  const area = Number(floorArea || 0);
-  const eui = computeEui(consumption, area);
-
-  if (consumption <= 0 || area <= 0) {
-    return "No Data";
-  }
-
-  if (eui > 20) {
-    return "Critical";
-  }
-
-  if (eui > 10) {
-    return "High";
-  }
-
-  return "Normal";
-}
+// computeEui and getEnergyStatus were local copies of the same thresholds that
+// Dashboard also carried. Both now come from utils/energyStatus.js so the map,
+// the Dashboard, Analytics and Reports cannot drift apart again.
 
 function normalizeBuildingMapRow(row) {
   const totalConsumption = Number(row.total_consumption || 0);
@@ -114,46 +138,23 @@ function normalizeReading(reading) {
     meter_id: reading.meter_id,
     reading_value: Number(reading.reading_value || 0),
     reading_date: reading.reading_date || "",
-    ocr_accuracy: Number(reading.ocr_accuracy || 0),
+    ocr_accuracy: getOcrScore(reading.ocr_accuracy),
     is_verified: Boolean(reading.is_verified),
   };
 }
 
-function formatNumber(value) {
-  const numericValue = Number(value);
-
-  if (Number.isNaN(numericValue)) {
-    return "0";
-  }
-
-  return Math.round(numericValue).toLocaleString();
-}
-
-function formatDecimal(value) {
-  const numericValue = Number(value);
-
-  if (Number.isNaN(numericValue)) {
-    return "0.00";
-  }
-
-  return numericValue.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatDateTime(value) {
-  if (!value) {
-    return "No latest reading";
-  }
-
+function formatShortDate(value) {
   const date = new Date(value);
 
-  if (Number.isNaN(date.getTime())) {
-    return value;
+  if (!value || Number.isNaN(date.getTime())) {
+    return value || "";
   }
 
-  return date.toLocaleString();
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function getStatusColor(status) {
@@ -188,6 +189,22 @@ function getStatusStyle(status) {
   return "border-slate-100 bg-slate-50 text-slate-600";
 }
 
+function getStatusTint(status) {
+  if (status === "Critical") {
+    return "bg-red-50 text-red-600";
+  }
+
+  if (status === "High") {
+    return "bg-amber-50 text-amber-600";
+  }
+
+  if (status === "Normal") {
+    return "bg-emerald-50 text-emerald-700";
+  }
+
+  return "bg-slate-100 text-slate-500";
+}
+
 function getRecommendation(building) {
   if (!building) {
     return "Select a building to view GIS-based energy monitoring details.";
@@ -212,41 +229,207 @@ function getRecommendation(building) {
   return "Building EUI is within the normal monitoring range.";
 }
 
-function createMarkerIcon(status) {
-  const color = getStatusColor(status);
+function formatEui(building) {
+  return building.energy_status === "No Data" ? "—" : formatDecimal(building.eui);
+}
 
-  return L.divIcon({
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Lucide's Building2, inlined because a divIcon takes an HTML string.
+const BUILDING_GLYPH =
+  '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4M10 10h4M10 14h4M10 18h4"/></svg>';
+
+// react-leaflet calls setIcon whenever the icon prop is a new object, which rebuilds
+// the marker's DOM and restarts the Critical pulse. Reusing one icon per look keeps
+// the markers still across the 30-second refresh.
+const markerIconCache = new Map();
+
+function getMarkerIcon(building, isSelected) {
+  const status = building.energy_status;
+  const cacheKey = `${status}|${isSelected ? building.name : ""}`;
+
+  if (markerIconCache.has(cacheKey)) {
+    return markerIconCache.get(cacheKey);
+  }
+
+  const classes = [
+    "energy-pin",
+    isSelected ? "is-selected" : "",
+    status === "Critical" ? "is-critical" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  // The pin's tip sits at (18, 39) inside the 36x42 box; see .energy-pin in
+  // index.css for the geometry.
+  const icon = L.divIcon({
     className: "energy-marker",
     html: `
-      <div style="
-        width: 30px;
-        height: 30px;
-        border-radius: 9999px;
-        background: ${color};
-        border: 4px solid white;
-        box-shadow: 0 12px 25px rgba(15, 23, 42, 0.28);
-      "></div>
+      ${isSelected ? `<span class="energy-pin__label">${escapeHtml(building.name)}</span>` : ""}
+      <span class="${classes}" style="--pin-color: ${getStatusColor(status)}">
+        <span class="energy-pin__pulse"></span>
+        <span class="energy-pin__head"><span class="energy-pin__glyph">${BUILDING_GLYPH}</span></span>
+      </span>
     `,
-    iconSize: [30, 30],
-    iconAnchor: [15, 15],
+    iconSize: [36, 42],
+    iconAnchor: [18, 39],
+    tooltipAnchor: [0, -36],
+  });
+
+  markerIconCache.set(cacheKey, icon);
+
+  return icon;
+}
+
+function toLatLng(building) {
+  return [Number(building.latitude), Number(building.longitude)];
+}
+
+function fitMapToBuildings(map, buildings, animate = true) {
+  const points = buildings.map(toLatLng);
+
+  if (points.length === 0) {
+    map.setView(DEFAULT_CENTER, DEFAULT_ZOOM, { animate });
+    return;
+  }
+
+  if (points.length === 1) {
+    map.setView(points[0], FOCUS_ZOOM, { animate });
+    return;
+  }
+
+  map.fitBounds(L.latLngBounds(points), {
+    padding: [64, 64],
+    maxZoom: FOCUS_ZOOM,
+    animate,
   });
 }
 
-function MapFlyTo({ center }) {
-  const map = useMap();
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+}
 
-  useEffect(() => {
-    if (!center) {
-      return;
-    }
+function MapControlButton({ label, onClick, children }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="grid h-9 w-9 place-items-center text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
+    >
+      {children}
+    </button>
+  );
+}
 
-    map.flyTo(center, 17, {
-      animate: true,
-      duration: 0.7,
-    });
-  }, [center, map]);
+function CardMetric({ label, value, unit }) {
+  return (
+    <div className="min-w-0 px-3 py-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </p>
 
-  return null;
+      <p className="mt-1 truncate text-sm font-semibold tabular-nums text-slate-950">
+        {value}
+      </p>
+
+      <p className="text-[10px] leading-3 text-slate-400">{unit}</p>
+    </div>
+  );
+}
+
+function SelectedBuildingCard({ building, onClose, onViewDetails }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-xl backdrop-blur">
+      <div className="flex items-start gap-3">
+        <span
+          className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${getStatusTint(
+            building.energy_status
+          )}`}
+        >
+          <Building2 size={19} />
+        </span>
+
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-base font-bold leading-tight text-slate-950">
+            {building.name}
+          </h3>
+
+          <p className="mt-1 truncate text-xs text-slate-500">
+            {building.building_type} · {building.meter_count}{" "}
+            {building.meter_count === 1 ? "meter" : "meters"} ·{" "}
+            {building.reading_count} readings
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close building details"
+          className="-mr-1 -mt-1 rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 divide-x divide-slate-100 rounded-xl border border-slate-100 bg-slate-50/80">
+        <CardMetric label="EUI" value={formatEui(building)} unit="kWh/m²" />
+        <CardMetric
+          label="Used"
+          value={formatNumber(building.total_consumption)}
+          unit="kWh"
+        />
+        <CardMetric
+          label="Area"
+          value={formatNumber(building.floor_area)}
+          unit="m²"
+        />
+      </div>
+
+      <div className="mt-3 hidden items-start gap-2 text-xs leading-5 text-slate-600 sm:flex">
+        <span
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4 ${getStatusStyle(
+            building.energy_status
+          )}`}
+        >
+          {building.energy_status}
+        </span>
+
+        <span>{getRecommendation(building)}</span>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+        <div className="min-w-0 text-xs leading-4">
+          <p className="text-slate-400">Latest reading</p>
+
+          <p className="truncate font-medium text-slate-700">
+            {building.latest_reading_date
+              ? `${formatNumber(building.latest_reading)} kWh · ${formatShortDate(
+                  building.latest_reading_date
+                )}`
+              : "No readings yet"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onViewDetails}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-slate-950 px-3.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+        >
+          <Eye size={14} />
+          View details
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ToastMessage({ toast, onClose }) {
@@ -259,7 +442,7 @@ function ToastMessage({ toast, onClose }) {
   return (
     <div className="fixed right-5 top-28 z-[60000] w-[calc(100%-2.5rem)] max-w-md">
       <div
-        className={`flex items-start gap-3 rounded-3xl border p-4 shadow-2xl shadow-slate-950/10 ${
+        className={`flex items-start gap-3 rounded-2xl border p-4 shadow-xl ${
           isError
             ? "border-red-100 bg-red-50 text-red-800"
             : "border-emerald-100 bg-emerald-50 text-emerald-800"
@@ -274,11 +457,11 @@ function ToastMessage({ toast, onClose }) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-black">
+          <p className="text-sm font-semibold">
             {isError ? "Something went wrong" : "Success"}
           </p>
 
-          <p className="mt-1 text-sm font-bold leading-5 opacity-80">
+          <p className="mt-1 text-sm font-normal leading-5 opacity-80">
             {toast.message}
           </p>
         </div>
@@ -295,32 +478,6 @@ function ToastMessage({ toast, onClose }) {
   );
 }
 
-function StatCard({ title, value, icon: Icon, tone = "dark", description }) {
-  const palette = {
-    green:  { bg: "border-emerald-100 bg-emerald-50", title: "text-emerald-700", value: "text-emerald-800", icon: "bg-emerald-700 text-white" },
-    amber:  { bg: "border-amber-100 bg-amber-50",     title: "text-amber-700",   value: "text-amber-800",   icon: "bg-amber-500 text-white" },
-    red:    { bg: "border-red-100 bg-red-50",         title: "text-red-700",     value: "text-red-800",     icon: "bg-red-500 text-white" },
-    blue:   { bg: "border-blue-100 bg-blue-50",       title: "text-blue-700",    value: "text-blue-800",    icon: "bg-blue-600 text-white" },
-    dark:   { bg: "border-slate-200 bg-white",        title: "text-slate-500",   value: "text-slate-950",   icon: "bg-slate-950 text-lime-300" },
-  };
-  const c = palette[tone] ?? palette.dark;
-
-  return (
-    <div className={`rounded-[1.7rem] border p-5 shadow-sm ${c.bg}`}>
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <p className={`text-sm font-black ${c.title}`}>{title}</p>
-          <p className={`mt-2 text-3xl font-black leading-none ${c.value}`}>{value}</p>
-        </div>
-        <div className={`grid h-12 w-12 place-items-center rounded-2xl ${c.icon}`}>
-          <Icon size={23} />
-        </div>
-      </div>
-      <p className={`text-xs font-bold leading-5 ${c.title}`}>{description}</p>
-    </div>
-  );
-}
-
 function BuildingDetailsModal({ building, onClose }) {
   if (!building) {
     return null;
@@ -328,19 +485,19 @@ function BuildingDetailsModal({ building, onClose }) {
 
   const modalContent = (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/70 p-5">
-      <div className="relative z-[50001] flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-2xl shadow-slate-950/40">
+      <div className="relative z-[50001] flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
         <div className="shrink-0 border-b border-slate-100 bg-white p-6">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <p className="text-xs font-black uppercase tracking-[0.22em] text-emerald-700">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
                 GIS Building Details
               </p>
 
-              <h2 className="mt-2 break-words text-2xl font-black leading-tight text-slate-950">
+              <h2 className="mt-2 break-words text-2xl font-bold leading-tight text-slate-950">
                 {building.name}
               </h2>
 
-              <p className="mt-1 text-sm font-bold text-slate-500">
+              <p className="mt-1 text-sm font-normal text-slate-500">
                 Energy status and monitoring summary.
               </p>
             </div>
@@ -358,12 +515,12 @@ function BuildingDetailsModal({ building, onClose }) {
         <div className="flex-1 overflow-y-auto p-6">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Energy Status
               </p>
 
               <span
-                className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                   building.energy_status
                 )}`}
               >
@@ -372,72 +529,72 @@ function BuildingDetailsModal({ building, onClose }) {
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 EUI
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {formatDecimal(building.eui)} kWh/m²
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Total Consumption
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {formatNumber(building.total_consumption)} kWh
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Floor Area
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {formatNumber(building.floor_area)} m²
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Latest Reading
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {formatNumber(building.latest_reading)} kWh
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Meters / Readings
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {building.meter_count} meters • {building.reading_count}{" "}
                 readings
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Building Type
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {building.building_type}
               </p>
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 EUI Calculation
               </p>
 
-              <p className="mt-2 text-sm font-bold leading-6 text-slate-700">
+              <p className="mt-2 text-sm font-normal leading-6 text-slate-700">
                 {formatNumber(building.total_consumption)} kWh ÷{" "}
                 {formatNumber(building.floor_area)} m² ={" "}
                 {formatDecimal(building.eui)} kWh/m²
@@ -445,21 +602,21 @@ function BuildingDetailsModal({ building, onClose }) {
             </div>
 
             <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-400">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
                 Coordinates
               </p>
 
-              <p className="mt-2 text-lg font-black text-slate-950">
+              <p className="mt-2 text-lg font-semibold text-slate-950">
                 {building.latitude}, {building.longitude}
               </p>
             </div>
 
             <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 md:col-span-2">
-              <p className="text-xs font-black uppercase tracking-[0.16em] text-emerald-700">
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
                 Recommendation
               </p>
 
-              <p className="mt-2 text-sm font-bold leading-6 text-emerald-800">
+              <p className="mt-2 text-sm font-normal leading-6 text-emerald-800">
                 {getRecommendation(building)}
               </p>
             </div>
@@ -471,7 +628,7 @@ function BuildingDetailsModal({ building, onClose }) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50"
+              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
               Close
             </button>
@@ -484,20 +641,27 @@ function BuildingDetailsModal({ building, onClose }) {
   return createPortal(modalContent, document.body);
 }
 
+// Kept next to the real row's grid-cols-[...] class so the two stay in step.
+const MAP_ROW_COLUMNS = "1.2fr 0.9fr 0.9fr 1fr 0.9fr 1fr 0.9fr";
+
 export default function BuildingMap() {
   const [buildings, setBuildings] = useState([]);
-  const [meters, setMeters] = useState([]);
-  const [readings, setReadings] = useState([]);
-  const [statusFilter, setStatusFilter] = useState("All Status");
-  const [buildingFilter, setBuildingFilter] = useState("All Buildings");
+  const [statusFilter, setStatusFilter] = useState("All");
   const [query, setQuery] = useState("");
-  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  // An id rather than the row itself, so the card shows fresh numbers after each
+  // auto-refresh instead of the snapshot taken when the building was clicked.
+  const [selectedId, setSelectedId] = useState(null);
+  // On a phone the card covers half the map, so it waits for a tap there.
+  const [isCardOpen, setIsCardOpen] = useState(() => window.innerWidth >= 640);
+  const [baseLayer, setBaseLayer] = useState("map");
+  const [map, setMap] = useState(null);
   const [detailsBuilding, setDetailsBuilding] = useState(null);
   const [toast, setToast] = useState({
     message: "",
     type: "success",
   });
   const [isLoading, setIsLoading] = useState(false);
+  const mapSectionRef = useRef(null);
 
   function showToast(message, type = "success") {
     setToast({ message, type });
@@ -589,12 +753,7 @@ export default function BuildingMap() {
 
       const latestReading = sortedReadings[0];
 
-      const averageAccuracy = buildingReadings.length
-        ? buildingReadings.reduce(
-            (sum, reading) => sum + Number(reading.ocr_accuracy || 0),
-            0
-          ) / buildingReadings.length
-        : 0;
+      const averageAccuracy = getAverageOcrAccuracy(buildingReadings) ?? 0;
 
       const verifiedCount = buildingReadings.filter(
         (reading) => reading.is_verified
@@ -632,27 +791,34 @@ export default function BuildingMap() {
     setIsLoading(true);
 
     try {
-      const [meterData, readingData] = await Promise.all([
-        fetchMeters(),
-        fetchReadings(),
-      ]);
-
       let mapRows = [];
 
       try {
+        // /map/buildings already returns per-building totals and energy status, so
+        // on the happy path there is nothing else to fetch. This used to pull the
+        // entire meters and readings tables up front, every 30 seconds, and then
+        // throw both away whenever this call succeeded.
         mapRows = await fetchMapRows();
       } catch {
-        const buildingData = await fetchBuildingsFallback();
+        // Only the fallback needs the raw tables to aggregate client-side.
+        const [buildingData, meterData, readingData] = await Promise.all([
+          fetchBuildingsFallback(),
+          fetchMeters(),
+          fetchReadings(),
+        ]);
+
         mapRows = buildMapRowsFromFallback(buildingData, meterData, readingData);
+
+        // The fallback aggregates differently from the backend (see
+        // buildMapRowsFromFallback), so say so rather than silently showing
+        // numbers computed a different way.
+        showToast(
+          "Map totals were calculated locally because the map service did not respond. Figures may differ slightly.",
+          "error"
+        );
       }
 
-      setMeters(meterData);
-      setReadings(readingData);
       setBuildings(mapRows);
-
-      if (mapRows.length > 0) {
-        setSelectedBuilding((current) => current || mapRows[0]);
-      }
     } catch (error) {
       console.error("GIS map refresh error:", error);
       showToast(
@@ -687,12 +853,7 @@ export default function BuildingMap() {
       const searchValue = query.toLowerCase();
 
       const matchesStatus =
-        statusFilter === "All Status" ||
-        building.energy_status === statusFilter;
-
-      const matchesBuilding =
-        buildingFilter === "All Buildings" ||
-        building.name === buildingFilter;
+        statusFilter === "All" || building.energy_status === statusFilter;
 
       const matchesSearch =
         building.name.toLowerCase().includes(searchValue) ||
@@ -704,21 +865,92 @@ export default function BuildingMap() {
         String(building.latitude).includes(searchValue) ||
         String(building.longitude).includes(searchValue);
 
-      return matchesStatus && matchesBuilding && matchesSearch;
+      return matchesStatus && matchesSearch;
     });
-  }, [buildingsWithCoordinates, statusFilter, buildingFilter, query]);
+  }, [buildingsWithCoordinates, statusFilter, query]);
+
+  const listBuildings = useMemo(() => {
+    return [...filteredBuildings].sort(
+      (a, b) =>
+        (STATUS_RANK[a.energy_status] ?? 4) -
+          (STATUS_RANK[b.energy_status] ?? 4) || b.eui - a.eui
+    );
+  }, [filteredBuildings]);
+
+  const statusCounts = useMemo(() => {
+    const counts = { All: buildingsWithCoordinates.length };
+
+    buildingsWithCoordinates.forEach((building) => {
+      counts[building.energy_status] =
+        (counts[building.energy_status] || 0) + 1;
+    });
+
+    return counts;
+  }, [buildingsWithCoordinates]);
+
+  // Tells the two empty cases apart: nothing mapped yet vs. filters hiding
+  // everything. They need opposite calls to action.
+  const hasActiveFilters = query.trim() !== "" || statusFilter !== "All";
+
+  function clearFilters() {
+    setQuery("");
+    setStatusFilter("All");
+  }
 
   const activeBuilding =
-    selectedBuilding &&
-    filteredBuildings.some(
-      (building) => building.building_id === selectedBuilding.building_id
-    )
-      ? selectedBuilding
-      : filteredBuildings[0] || buildingsWithCoordinates[0] || null;
+    filteredBuildings.find((building) => building.building_id === selectedId) ||
+    listBuildings[0] ||
+    null;
 
-  const mapCenter = activeBuilding
-    ? [Number(activeBuilding.latitude), Number(activeBuilding.longitude)]
-    : DEFAULT_CENTER;
+  // Re-frame only when the set of visible buildings actually changes. The old map
+  // flew back to the selected building on every render, so each 30-second refresh
+  // and every keystroke in the search box undid the user's panning.
+  const boundsKey = filteredBuildings
+    .map((building) => `${building.building_id}:${building.latitude},${building.longitude}`)
+    .join(";");
+
+  useEffect(() => {
+    if (!map) {
+      return;
+    }
+
+    map.invalidateSize();
+    fitMapToBuildings(map, filteredBuildings, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, boundsKey]);
+
+  function selectBuilding(building, { scrollToMap = false } = {}) {
+    setSelectedId(building.building_id);
+    setIsCardOpen(true);
+
+    if (scrollToMap) {
+      mapSectionRef.current?.scrollIntoView({
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+        block: "center",
+      });
+    }
+
+    if (!map) {
+      return;
+    }
+
+    const latLng = L.latLng(toLatLng(building));
+    const zoom = Math.max(map.getZoom(), FOCUS_ZOOM);
+
+    // On a narrow map the details card covers the lower half, so park the
+    // building above centre instead of underneath the card.
+    const size = map.getSize();
+    const offsetY = size.x < 640 ? Math.round(size.y * 0.22) : 0;
+    const target = offsetY
+      ? map.unproject(map.project(latLng, zoom).add([0, offsetY]), zoom)
+      : latLng;
+
+    if (prefersReducedMotion()) {
+      map.setView(target, zoom, { animate: false });
+    } else {
+      map.flyTo(target, zoom, { duration: 0.6 });
+    }
+  }
 
   const normalCount = buildings.filter(
     (building) => building.energy_status === "Normal"
@@ -737,8 +969,10 @@ export default function BuildingMap() {
       buildings.length
     : 0;
 
+  const tileLayer = BASE_LAYERS[baseLayer];
+
   return (
-    <div className="relative z-0 space-y-6 font-[Nunito]">
+    <div className="relative z-0 space-y-6">
       <ToastMessage toast={toast} onClose={hideToast} />
 
       <PageHeader
@@ -804,315 +1038,332 @@ export default function BuildingMap() {
         />
       </section>
 
-      <section className="relative z-0 rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1.4fr]">
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
-          >
-            {STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={buildingFilter}
-            onChange={(event) => {
-              setBuildingFilter(event.target.value);
-
-              const target = buildings.find(
-                (building) => building.name === event.target.value
-              );
-
-              if (target) {
-                setSelectedBuilding(target);
-              }
-            }}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
-          >
-            <option value="All Buildings">All Buildings</option>
-
-            {buildingsWithCoordinates.map((building) => (
-              <option key={building.building_id} value={building.name}>
-                {building.name}
-              </option>
-            ))}
-          </select>
-
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 sm:col-span-2 xl:col-span-1">
-            <Search size={18} className="text-slate-400" />
-
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search building, status, EUI, coordinates..."
-              className="w-full bg-transparent text-sm font-bold text-slate-700 outline-none placeholder:text-slate-400"
-            />
-          </div>
-        </div>
-      </section>
-
-      {buildingsWithCoordinates.length === 0 && (
-        <section className="relative z-0 rounded-[1.7rem] border border-amber-100 bg-amber-50 p-5 shadow-sm">
-          <div className="flex items-start gap-3">
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-amber-500 text-white">
-              <AlertTriangle size={22} />
-            </div>
-
-            <div>
-              <h2 className="text-lg font-black text-amber-900">
-                No GIS coordinates available
-              </h2>
-
-              <p className="mt-1 text-sm font-bold leading-6 text-amber-700">
-                Add building coordinates to display map markers.
-              </p>
-            </div>
-          </div>
-        </section>
+      {buildingsWithCoordinates.length === 0 && !isLoading && (
+        <EmptyState
+          variant="blocked"
+          icon={AlertTriangle}
+          title="No GIS coordinates available"
+          description="Buildings only appear as map markers once they have a latitude and longitude. Add coordinates on the Buildings page."
+          className="relative z-0"
+        />
       )}
 
-      <section className="relative z-0 grid gap-6 lg:grid-cols-2">
-        <div className="relative h-[320px] overflow-hidden rounded-[2rem] border border-slate-200 bg-slate-100 shadow-sm sm:h-[420px] md:h-[520px] lg:h-[680px]">
-          <MapContainer
-            center={mapCenter}
-            zoom={17}
-            style={{ height: "100%", width: "100%" }}
-            zoomControl={false}
-          >
-            <MapFlyTo center={mapCenter} />
+      <section
+        ref={mapSectionRef}
+        className="energy-gis-map relative z-0 grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:h-[660px] lg:grid-cols-[320px_minmax(0,1fr)]"
+      >
+        <aside className="flex min-h-0 flex-col border-b border-slate-200 lg:border-b-0 lg:border-r">
+          <div className="space-y-3 border-b border-slate-100 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-950">
+                  Buildings
+                </h2>
 
-            <TileLayer
-              attribution="&copy; OpenStreetMap contributors"
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {filteredBuildings.length} of {buildingsWithCoordinates.length}{" "}
+                  shown on the map
+                </p>
+              </div>
 
-            {filteredBuildings.map((building) => (
-              <Marker
-                key={building.building_id}
-                position={[
-                  Number(building.latitude),
-                  Number(building.longitude),
-                ]}
-                icon={createMarkerIcon(building.energy_status)}
-                eventHandlers={{
-                  click: () => setSelectedBuilding(building),
-                }}
-              >
-                <Popup className="custom-popup">
-                  <div className="min-w-[230px] p-3">
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-700">
-                          Building
-                        </p>
-
-                        <h3 className="text-lg font-black text-slate-950">
-                          {building.name}
-                        </h3>
-                      </div>
-
-                      <span
-                        className={`rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
-                          building.energy_status
-                        )}`}
-                      >
-                        {building.energy_status}
-                      </span>
-                    </div>
-
-                    <div className="grid gap-2 text-sm font-bold text-slate-600">
-                      <p>Type: {building.building_type}</p>
-                      <p>
-                        Total: {formatNumber(building.total_consumption)} kWh
-                      </p>
-                      <p>Area: {formatNumber(building.floor_area)} m²</p>
-                      <p>EUI: {formatDecimal(building.eui)} kWh/m²</p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => setDetailsBuilding(building)}
-                      className="mt-4 w-full rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white transition hover:bg-emerald-700"
-                    >
-                      View Details
-                    </button>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
-
-          <div className="pointer-events-none absolute left-5 top-5 z-[1000] rounded-2xl bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
-            <p className="text-xs font-black uppercase tracking-[0.18em] text-slate-400">
-              EUI Status
-            </p>
-
-            <div className="mt-2 flex flex-wrap gap-3 text-xs font-black">
-              {["Normal", "High", "Critical", "No Data"].map((item) => (
-                <span key={item} className="inline-flex items-center gap-1">
-                  <span
-                    className="h-3 w-3 rounded-full"
-                    style={{ background: getStatusColor(item) }}
-                  />
-                  {item}
-                </span>
-              ))}
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-xl px-2 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
-          </div>
-        </div>
 
-        <aside className="relative z-10 flex flex-col rounded-[2rem] border border-slate-200 bg-white p-6 shadow-sm lg:h-[680px]">
-          <div className="mb-5 flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-emerald-700">
-                Selected Building
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 transition focus-within:border-emerald-600 focus-within:bg-white">
+              <Search size={16} className="shrink-0 text-slate-400" />
+
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search name, type, EUI..."
+                aria-label="Search buildings"
+                className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+              />
+
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="shrink-0 rounded-full p-0.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </label>
+
+            <div role="group" aria-label="Filter by EUI status">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                EUI status
               </p>
 
-              <h3 className="mt-1 text-lg font-black leading-tight text-slate-950">
-                {activeBuilding?.name || "No building selected"}
-              </h3>
-            </div>
+              <div className="flex flex-wrap gap-1.5">
+                {STATUS_FILTERS.map((status) => {
+                  const isActive = statusFilter === status;
 
-            {activeBuilding && (
-              <span
-                className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
-                  activeBuilding.energy_status
-                )}`}
-              >
-                {activeBuilding.energy_status}
-              </span>
+                  return (
+                    <button
+                      key={status}
+                      type="button"
+                      aria-pressed={isActive}
+                      onClick={() => setStatusFilter(status)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                        isActive
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                      }`}
+                    >
+                      {status !== "All" && (
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ background: getStatusColor(status) }}
+                        />
+                      )}
+                      {status}
+                      <span
+                        className={`tabular-nums ${
+                          isActive ? "text-white/60" : "text-slate-400"
+                        }`}
+                      >
+                        {statusCounts[status] || 0}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <div className="max-h-[272px] flex-1 overflow-y-auto p-2 lg:max-h-none">
+            {listBuildings.length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <p className="text-sm font-semibold text-slate-700">
+                  {hasActiveFilters
+                    ? "No buildings match"
+                    : isLoading
+                    ? "Loading buildings..."
+                    : "No mapped buildings yet"}
+                </p>
+
+                <p className="mt-1 text-xs text-slate-500">
+                  {hasActiveFilters
+                    ? "Try another search or status."
+                    : "Buildings need a latitude and longitude to appear here."}
+                </p>
+              </div>
+            ) : (
+              <ul className="space-y-1">
+                {listBuildings.map((building) => {
+                  const isActive =
+                    activeBuilding?.building_id === building.building_id;
+
+                  return (
+                    <li key={building.building_id}>
+                      <button
+                        type="button"
+                        onClick={() => selectBuilding(building)}
+                        aria-current={isActive ? "true" : undefined}
+                        className={`flex w-full items-center gap-3 rounded-xl px-2.5 py-2.5 text-left transition ${
+                          isActive
+                            ? "bg-emerald-50/70 ring-1 ring-inset ring-emerald-200"
+                            : "hover:bg-slate-50"
+                        }`}
+                      >
+                        <span
+                          className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${getStatusTint(
+                            building.energy_status
+                          )}`}
+                        >
+                          <Building2 size={17} />
+                        </span>
+
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-semibold text-slate-900">
+                            {building.name}
+                          </span>
+
+                          <span className="mt-0.5 flex items-center gap-1.5 truncate text-xs text-slate-500">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{
+                                background: getStatusColor(building.energy_status),
+                              }}
+                            />
+                            {building.energy_status} · {building.building_type}
+                          </span>
+                        </span>
+
+                        <span className="shrink-0 text-right">
+                          <span className="block text-sm font-semibold tabular-nums text-slate-900">
+                            {formatEui(building)}
+                          </span>
+
+                          <span className="block text-[10px] text-slate-400">
+                            kWh/m²
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
 
-          {activeBuilding ? (
-            <div className="flex flex-1 flex-col gap-2.5">
-              <div className="grid gap-2.5 sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Energy Use Intensity
-                  </p>
+          <p className="border-t border-slate-100 px-4 py-2.5 text-[11px] leading-4 text-slate-400">
+            Normal ≤ {EUI_HIGH_THRESHOLD} · High &gt; {EUI_HIGH_THRESHOLD} ·
+            Critical &gt; {EUI_CRITICAL_THRESHOLD} kWh/m²
+          </p>
+        </aside>
 
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {formatDecimal(activeBuilding.eui)} kWh/m²
-                  </p>
-                </div>
+        <div className="energy-map-shell h-[440px] sm:h-[520px] lg:h-full">
+          <MapContainer
+            ref={setMap}
+            center={DEFAULT_CENTER}
+            zoom={DEFAULT_ZOOM}
+            maxZoom={MAP_MAX_ZOOM}
+            zoomControl={false}
+            style={{ height: "100%", width: "100%" }}
+          >
+            <TileLayer
+              key={baseLayer}
+              url={tileLayer.url}
+              attribution={tileLayer.attribution}
+              maxZoom={MAP_MAX_ZOOM}
+              maxNativeZoom={tileLayer.maxNativeZoom}
+              className={tileLayer.className}
+            />
 
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Total Energy Used
-                  </p>
+            {filteredBuildings.map((building) => {
+              const isSelected =
+                isCardOpen && activeBuilding?.building_id === building.building_id;
 
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {formatNumber(activeBuilding.total_consumption)} kWh
-                  </p>
-                </div>
-              </div>
+              return (
+                <Marker
+                  key={building.building_id}
+                  position={toLatLng(building)}
+                  icon={getMarkerIcon(building, isSelected)}
+                  zIndexOffset={isSelected ? 1000 : 0}
+                  eventHandlers={{
+                    click: () => selectBuilding(building),
+                  }}
+                >
+                  {!isSelected && (
+                    <Tooltip
+                      direction="top"
+                      offset={[0, -4]}
+                      opacity={1}
+                      className="energy-map-tooltip"
+                    >
+                      <span className="block text-xs font-semibold">
+                        {building.name}
+                      </span>
 
-              <div className="grid gap-2.5 sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Floor Area
-                  </p>
+                      <span className="block text-[11px] text-white/70">
+                        {building.energy_status} · {formatEui(building)} kWh/m²
+                      </span>
+                    </Tooltip>
+                  )}
+                </Marker>
+              );
+            })}
+          </MapContainer>
 
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {formatNumber(activeBuilding.floor_area)}{" "}
-                    <span className="text-xs font-bold text-slate-500">m²</span>
-                  </p>
-                </div>
+          <div
+            role="group"
+            aria-label="Base map"
+            className="absolute left-3 top-3 z-[1000] inline-flex rounded-full border border-slate-200 bg-white/95 p-1 shadow-md backdrop-blur"
+          >
+            {Object.entries(BASE_LAYERS).map(([key, layer]) => {
+              const LayerIcon = layer.icon;
+              const isActive = baseLayer === key;
 
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Readings
-                  </p>
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => setBaseLayer(key)}
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition ${
+                    isActive
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+                  }`}
+                >
+                  <LayerIcon size={14} />
+                  {layer.label}
+                </button>
+              );
+            })}
+          </div>
 
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {activeBuilding.reading_count}
-                  </p>
-                </div>
-              </div>
+          <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
+            <div className="flex flex-col divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-md backdrop-blur">
+              <MapControlButton label="Zoom in" onClick={() => map?.zoomIn()}>
+                <Plus size={16} />
+              </MapControlButton>
 
-              <div className="grid gap-2.5 sm:grid-cols-2">
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Meters
-                  </p>
-
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {activeBuilding.meter_count}
-                  </p>
-                </div>
-
-                <div className="rounded-2xl bg-slate-50 p-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                    Latest Reading
-                  </p>
-
-                  <p className="mt-1 text-base font-black text-slate-950">
-                    {formatNumber(activeBuilding.latest_reading)} kWh
-                  </p>
-
-                  <p className="mt-0.5 text-xs font-bold text-slate-500">
-                    {formatDateTime(activeBuilding.latest_reading_date)}
-                  </p>
-                </div>
-              </div>
-
-              <div className="rounded-2xl bg-slate-50 p-3">
-                <p className="text-[10px] font-black uppercase tracking-[0.16em] text-slate-400">
-                  Map Location
-                </p>
-
-                <p className="mt-1 text-sm font-bold leading-5 text-slate-700">
-                  {activeBuilding.latitude}, {activeBuilding.longitude}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3 text-sm font-bold leading-6 text-emerald-900">
-                <LocateFixed className="mb-1" size={16} />
-                {getRecommendation(activeBuilding)}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setDetailsBuilding(activeBuilding)}
-                className="mt-auto flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-emerald-700"
-              >
-                <Eye size={16} />
-                View Full Details
-              </button>
+              <MapControlButton label="Zoom out" onClick={() => map?.zoomOut()}>
+                <Minus size={16} />
+              </MapControlButton>
             </div>
-          ) : (
-            <div className="rounded-3xl border border-slate-100 bg-slate-50 p-6 text-center text-sm font-black text-slate-400">
-              Select a building marker from the map.
+
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-md backdrop-blur">
+              <MapControlButton
+                label="Fit all buildings"
+                onClick={() => map && fitMapToBuildings(map, filteredBuildings)}
+              >
+                <Scan size={16} />
+              </MapControlButton>
+            </div>
+          </div>
+
+          {isLoading && buildings.length === 0 && (
+            <div className="pointer-events-none absolute left-1/2 top-16 z-[1000] -translate-x-1/2 rounded-full border border-slate-200 bg-white/95 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-md backdrop-blur">
+              Loading map data...
             </div>
           )}
-        </aside>
+
+          {activeBuilding && isCardOpen && (
+            <div className="absolute inset-x-3 bottom-3 z-[1000] sm:inset-x-auto sm:bottom-4 sm:left-4 sm:w-[360px]">
+              <SelectedBuildingCard
+                building={activeBuilding}
+                onClose={() => setIsCardOpen(false)}
+                onViewDetails={() => setDetailsBuilding(activeBuilding)}
+              />
+            </div>
+          )}
+        </div>
       </section>
 
-      <section className="relative z-0 rounded-[1.7rem] border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="relative z-0 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-black text-slate-950">
+            <h2 className="text-xl font-semibold text-slate-950">
               GIS Building Records
             </h2>
 
-            <p className="mt-1 text-sm font-bold text-slate-500">
+            <p className="mt-1 text-sm font-normal text-slate-500">
               Location-based EUI and monitoring summary.
             </p>
           </div>
 
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-black text-emerald-700">
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
             {filteredBuildings.length} buildings shown
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-3xl border border-slate-200">
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
           <div className="min-w-[1180px]">
-            <div className="grid grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-black uppercase tracking-[0.14em] text-slate-400">
+            <div className="grid grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Building</div>
               <div>Total kWh</div>
               <div>Floor Area</div>
@@ -1122,57 +1373,77 @@ export default function BuildingMap() {
               <div>Status</div>
             </div>
 
-            {isLoading ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                Loading GIS map data...
-              </div>
+            {isLoading && buildings.length === 0 ? (
+              <SkeletonRows columns={MAP_ROW_COLUMNS} rows={5} />
             ) : filteredBuildings.length === 0 ? (
-              <div className="p-8 text-center text-sm font-black text-slate-500">
-                No building map records found.
-              </div>
+              hasActiveFilters ? (
+                <EmptyState
+                  variant="filtered"
+                  icon={Search}
+                  title="No buildings match your filters"
+                  description="Try a different search term, or reset the filters to see every mapped building."
+                  action={
+                    <HeaderActionButton icon={X} onClick={clearFilters}>
+                      Clear filters
+                    </HeaderActionButton>
+                  }
+                  className="m-4"
+                />
+              ) : (
+                <EmptyState
+                  icon={MapPinned}
+                  title="No mapped buildings yet"
+                  description="Buildings with latitude and longitude appear here alongside their EUI status."
+                  className="m-4"
+                />
+              )
             ) : (
               <div className="divide-y divide-slate-100">
                 {filteredBuildings.map((building) => (
                   <button
                     key={building.building_id}
                     type="button"
-                    onClick={() => setSelectedBuilding(building)}
-                    className="grid w-full grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] items-center px-4 py-4 text-left text-sm transition hover:bg-slate-50"
+                    onClick={() => selectBuilding(building, { scrollToMap: true })}
+                    className={`grid w-full grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] items-center px-4 py-4 text-left text-sm transition ${
+                      activeBuilding?.building_id === building.building_id
+                        ? "bg-emerald-50/60"
+                        : "hover:bg-slate-50"
+                    }`}
                   >
                     <div>
-                      <p className="font-black text-slate-950">
+                      <p className="font-semibold text-slate-950">
                         {building.name}
                       </p>
 
-                      <p className="mt-1 text-xs font-bold text-slate-400">
+                      <p className="mt-1 text-xs font-normal text-slate-400">
                         {building.verified_count} verified /{" "}
                         {building.pending_count} review
                       </p>
                     </div>
 
-                    <div className="font-black text-slate-950">
+                    <div className="font-semibold text-slate-950">
                       {formatNumber(building.total_consumption)} kWh
                     </div>
 
-                    <div className="font-bold text-slate-600">
+                    <div className="font-medium text-slate-600">
                       {formatNumber(building.floor_area)} m²
                     </div>
 
-                    <div className="font-black text-emerald-700">
+                    <div className="font-semibold text-emerald-700">
                       {formatDecimal(building.eui)} kWh/m²
                     </div>
 
-                    <div className="font-black text-slate-700">
+                    <div className="font-semibold text-slate-700">
                       {building.meter_count}
                     </div>
 
-                    <div className="font-bold text-slate-600">
+                    <div className="font-medium text-slate-600">
                       {building.latitude}, {building.longitude}
                     </div>
 
                     <div>
                       <span
-                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-black ${getStatusStyle(
+                        className={`inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
                           building.energy_status
                         )}`}
                       >
