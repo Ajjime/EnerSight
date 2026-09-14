@@ -71,17 +71,15 @@ import {
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import SkeletonRows from "../components/SkeletonRows";
+import {
+  PERIOD_OPTIONS,
+  getPeriodWindows,
+  isInWindow,
+  isInvalidCustomRange,
+} from "../utils/periods";
 const AUTO_REFRESH_MS = 60000;
 const DAYS_PER_MONTH = 365 / 12;
-const DAY_MS = 86400000;
 
-const periodOptions = [
-  "All Time",
-  "This Month",
-  "Last Month",
-  "This Year",
-  "Custom Range",
-];
 // "No Data" is reachable now that status is graded by energy intensity: a building
 // with no floor area recorded cannot be scored.
 const statusOptions = ["All Status", "Normal", "High", "Critical", "No Data"];
@@ -155,99 +153,6 @@ function normalizeAppliance(appliance) {
     building_id: appliance.building_id,
     kwh_month: applianceKwhMonth(appliance),
   };
-}
-
-// ─── Periods ─────────────────────────────────────────────────────────────────
-
-/** "YYYY-MM-DD" from a date input -> local midnight in ms, plus `dayOffset` days. */
-function parseDateInput(value, dayOffset = 0) {
-  if (!value) return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day + dayOffset).getTime();
-}
-
-function formatMonthYear(time) {
-  return new Date(time).toLocaleString("en-US", {
-    month: "short",
-    year: "numeric",
-  });
-}
-
-/**
- * The selected date window and the window it is compared against. Times are epoch
- * milliseconds, start inclusive and end exclusive; `current: null` means no limit.
- *
- * Partial periods compare like with like: this month so far against the same
- * number of days at the start of last month, not against all of last month.
- */
-function getPeriodWindows(period, customFrom, customTo) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
-
-  if (period === "This Month" || period === "This Year") {
-    const isMonth = period === "This Month";
-    const start = (isMonth ? new Date(year, month, 1) : new Date(year, 0, 1)).getTime();
-    const end = (isMonth ? new Date(year, month + 1, 1) : new Date(year + 1, 0, 1)).getTime();
-    const previousStart = (
-      isMonth ? new Date(year, month - 1, 1) : new Date(year - 1, 0, 1)
-    ).getTime();
-
-    return {
-      current: { start, end },
-      previous: {
-        start: previousStart,
-        end: Math.min(previousStart + (now.getTime() - start), start),
-      },
-      previousLabel: isMonth ? "the same point last month" : "the same point last year",
-    };
-  }
-
-  if (period === "Last Month") {
-    const start = new Date(year, month - 1, 1).getTime();
-    const previousStart = new Date(year, month - 2, 1).getTime();
-
-    return {
-      current: { start, end: new Date(year, month, 1).getTime() },
-      previous: { start: previousStart, end: start },
-      previousLabel: formatMonthYear(previousStart),
-    };
-  }
-
-  if (period === "Custom Range") {
-    const from = parseDateInput(customFrom);
-    // The "to" day is inclusive, so the window runs to the start of the next day.
-    const to = parseDateInput(customTo, 1);
-
-    if (from === null && to === null) {
-      return { current: null, previous: null, previousLabel: "" };
-    }
-
-    const current = { start: from ?? -Infinity, end: to ?? Infinity };
-
-    if (from === null || to === null || to <= from) {
-      return { current, previous: null, previousLabel: "" };
-    }
-
-    const length = to - from;
-    const days = Math.round(length / DAY_MS);
-
-    return {
-      current,
-      previous: { start: from - length, end: from },
-      previousLabel: `the previous ${days} day${days === 1 ? "" : "s"}`,
-    };
-  }
-
-  return { current: null, previous: null, previousLabel: "" };
-}
-
-function isInWindow(readingDate, window) {
-  if (!window) return true;
-  if (!readingDate) return false;
-  const time = new Date(readingDate).getTime();
-  return Number.isFinite(time) && time >= window.start && time < window.end;
 }
 
 // ─── Formatting and rules ────────────────────────────────────────────────────
@@ -779,8 +684,7 @@ const Analytics = () => {
     previousLabel,
   } = periodWindows;
 
-  const isCustomRangeInvalid =
-    periodFilter === "Custom Range" && customFrom && customTo && customFrom > customTo;
+  const isCustomRangeInvalid = isInvalidCustomRange(periodFilter, customFrom, customTo);
 
   const hasActiveFilters =
     buildingFilter !== "All Buildings" ||
@@ -1172,7 +1076,7 @@ const Analytics = () => {
             onChange={(e) => setPeriodFilter(e.target.value)}
             className={selectClass}
           >
-            {periodOptions.map((p) => <option key={p} value={p}>{p}</option>)}
+            {PERIOD_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
           <select
             aria-label="Energy status"
