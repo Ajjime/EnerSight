@@ -1,25 +1,31 @@
 """
-EnerSight Meter OCR  — v7
+EnerSight Meter OCR  — v8
 
-Primary:  Claude Vision API (claude-haiku) — handles all meter types with high accuracy.
-          Requires ANTHROPIC_API_KEY in environment.
-Secondary: Seven-segment cell classifier (OpenCV geometry, no ML required).
-           Works for LCD / digital display meters.
-Fallback:  EasyOCR for drum-wheel meters (solid-digit displays with dark bg).
+Every reading is decided by an ensemble of four engines, all run on each photo:
+
+  EasyOCR                            – anchor; several preprocessing variants, voted
+  CRNN + CTC                         – trained on the capstone kWh meter dataset
+  TPS + ResNet + BiLSTM + Attention  – same
+  TPS + ResNet + BiLSTM + CTC        – same (best on the held-out split)
 
 Pipeline
 ────────
 1. Smart watermark strip  – detect blue "Bood No." overlay, remove top strip
-2. Claude Vision          – base64 image → Claude Haiku → numeric reading
-3. Seven-segment pipeline – edge contour, binarise, cell segmentation, segment read
-4. EasyOCR fallback       – triggered for dark-bg displays or if classifier fails
+2. Digit-row localisation – binarise, find the display, isolate the digit band
+3. Ensemble               – all four engines read, then _run_ensemble reconciles them
+
+The trained models live in app/ocr_models/ and load lazily from checkpoints that
+are not committed (see app/ocr_models/weights/README.md); any that are missing are
+simply skipped, leaving EasyOCR to answer on its own.
+
+Step 2's helpers (_binarise_full, _find_display_binary, _find_digit_band) were
+originally written for a seven-segment classifier. That classifier was never wired
+into the pipeline and has been removed; the helpers stay because they build the
+tight digit crop the trained models expect.
 """
 
-import base64
 import logging
-import os
 import re
-import shutil
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -30,10 +36,14 @@ import numpy as np
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from ..auth import require_admin_or_staff
+from ..auth import get_current_user, require_admin_or_staff
 from ..models import User
+from ..ocr_models.inference import VARIANTS as _DTRB_VARIANTS
+from ..ocr_models.inference import available_variants as _dtrb_available
+from ..ocr_models.inference import predict as _dtrb_predict
 
-# Force-load .env from the backend root (works regardless of cwd)
+# Force-load .env from the backend root (works regardless of cwd). Keeps the
+# optional *_MODEL_PATH overrides read by ocr_models/inference.py available.
 _env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_env_path, override=True)
 
@@ -41,10 +51,22 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ocr", tags=["OCR"])
 
-UPLOAD_DIR = Path("uploads/meter_photos")
+# Anchored to the backend root rather than the process working directory, so photos
+# land in the same place no matter where uvicorn was started from.
+UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads" / "meter_photos"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# Where the saved photos are served from. Must match the StaticFiles mount in
+# app/main.py; a reading's image_path is built from this.
+UPLOAD_URL_PREFIX = "/uploads/meter_photos"
+
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+
+# A phone photo of a meter is well under 10 MB. Without a cap, copyfileobj below
+# would stream an arbitrarily large body to disk, and the pipeline would then feed
+# whatever it was to eight model inferences.
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 MIN_RELIABLE_CONFIDENCE = 0.70
 MIN_DIGITS = 3
@@ -95,182 +117,15 @@ def _strip_watermark(img: np.ndarray) -> np.ndarray:
         return img[int(h * 0.09):, :]
     return img
 
-# ═════════════════════════════════════════════════════════════════════════════
-# GEMINI VISION  (primary method — free tier available)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _gemini_vision_read(image_path: str, processed_img: np.ndarray | None = None) -> tuple[str, float, str]:
-    """
-    Use Google Gemini Flash to read the meter display.
-    Free tier: 1,500 requests/day — no credit card needed.
-    Get a free API key at https://aistudio.google.com
-    Requires GEMINI_API_KEY in environment.
-    If processed_img is provided, that ndarray is sent instead of the raw file.
-    """
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        return "", 0.0, "gemini: no API key set"
-
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError:
-        return "", 0.0, "gemini: google-genai package not installed"
-
-    try:
-        client = genai.Client(api_key=api_key)
-
-        if processed_img is not None:
-            _, buf = cv2.imencode(".jpg", processed_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            image_data = buf.tobytes()
-            mime_type = "image/jpeg"
-        else:
-            with open(image_path, "rb") as f:
-                image_data = f.read()
-            ext = Path(image_path).suffix.lower()
-            mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                        ".png": "image/png", ".webp": "image/webp"}
-            mime_type = mime_map.get(ext, "image/jpeg")
-
-        _GEMINI_PROMPT = (
-            "This is a cropped photo of an electricity meter LCD display showing a kWh reading. "
-            "Read the main consumption number on the display. "
-            "Rules:\n"
-            "1. Return ONLY a digit string — no spaces, no units, no letters.\n"
-            "2. If the display shows a decimal number like '02353.5', return ONLY the digits "
-            "   before the decimal point: '02353'.\n"
-            "3. Keep all leading zeros exactly as shown (e.g. '02353' not '2353').\n"
-            "4. If there are two rows of numbers, read only the larger main row.\n"
-            "5. If the rightmost digit is inside a red, black, or highlighted box, exclude that digit.\n"
-            "6. Output nothing except the digit string — no explanation, no units."
-        )
-
-        _MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
-
-        response = None
-        for model in _MODELS:
-            try:
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[
-                        types.Part.from_bytes(data=image_data, mime_type=mime_type),
-                        _GEMINI_PROMPT,
-                    ],
-                )
-                break
-            except Exception as model_exc:
-                logger.warning("Gemini model %s failed: %s", model, model_exc)
-                continue
-
-        if response is None:
-            return "", 0.0, "gemini: all models failed"
-
-        raw = response.text.strip()
-        # Take only the integer part — drop anything after a decimal/comma separator
-        integer_part = re.split(r"[.,]", raw)[0]
-        digits = re.sub(r"[^0-9]", "", integer_part)
-        logger.info("Gemini raw=%r  integer_part=%r  digits=%r", raw, integer_part, digits)
-
-        if MIN_DIGITS <= len(digits) <= MAX_DIGITS:
-            return digits, 0.97, raw
-        logger.warning("Gemini digit count %d out of range [%d,%d]", len(digits), MIN_DIGITS, MAX_DIGITS)
-        return "", 0.0, f"gemini raw={raw!r} (digit count out of range)"
-
-    except Exception as exc:
-        short = str(exc)[:120]
-        logger.error("Gemini Vision error: %s", exc)
-        return "", 0.0, f"gemini error: {short}"
-
-
-# ── Claude Vision fallback (if ANTHROPIC_API_KEY is set) ─────────────────────
-
-def _claude_vision_read(image_path: str, processed_img: np.ndarray | None = None) -> tuple[str, float]:
-    """Claude Haiku vision fallback. Requires ANTHROPIC_API_KEY."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return "", 0.0
-
-    try:
-        import anthropic
-    except ImportError:
-        return "", 0.0
-
-    try:
-        if processed_img is not None:
-            _, buf = cv2.imencode(".jpg", processed_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-            image_data = base64.standard_b64encode(buf.tobytes()).decode("utf-8")
-            media_type = "image/jpeg"
-        else:
-            with open(image_path, "rb") as f:
-                image_data = base64.standard_b64encode(f.read()).decode("utf-8")
-            ext = Path(image_path).suffix.lower()
-            media_type_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                              ".png": "image/png", ".webp": "image/webp"}
-            media_type = media_type_map.get(ext, "image/jpeg")
-
-        client = anthropic.Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=64,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64",
-                     "media_type": media_type, "data": image_data}},
-                    {"type": "text", "text": (
-                        "This is a cropped photo of an electricity meter display. "
-                        "Read the main kWh consumption number from the LCD or digital display. "
-                        "Return ONLY the digit string exactly as shown (e.g. '02353' or '012748'). "
-                        "Include ALL digits with leading zeros. "
-                        "If the rightmost digit is inside a red or black box, exclude only that digit. "
-                        "No kWh, no spaces, no decimal points. Digits only."
-                    )},
-                ],
-            }],
-        )
-
-        raw = message.content[0].text.strip()
-        integer_part = re.split(r"[.,]", raw)[0]
-        digits = re.sub(r"[^0-9]", "", integer_part)
-        logger.info("Claude raw=%r  integer_part=%r  digits=%r", raw, integer_part, digits)
-        if MIN_DIGITS <= len(digits) <= MAX_DIGITS:
-            return digits, 0.97
-        return "", 0.0
-
-    except Exception:
-        return "", 0.0
-
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SEVEN-SEGMENT DISPLAY CLASSIFIER
+# DIGIT LOCALISATION
 # ═════════════════════════════════════════════════════════════════════════════
-
-# Segment regions inside a normalised digit cell (y_start, y_end, x_start, x_end)
-# All values are fractions of cell height/width.
-_SEG_REGIONS: dict[str, tuple[float, float, float, float]] = {
-    "a": (0.00, 0.18, 0.10, 0.90),  # top  horizontal
-    "b": (0.04, 0.50, 0.68, 1.00),  # top-right  vertical
-    "c": (0.50, 0.96, 0.68, 1.00),  # bot-right  vertical
-    "d": (0.82, 1.00, 0.10, 0.90),  # bottom horizontal
-    "e": (0.50, 0.96, 0.00, 0.32),  # bot-left   vertical
-    "f": (0.04, 0.50, 0.00, 0.32),  # top-left   vertical
-    "g": (0.40, 0.60, 0.10, 0.90),  # middle horizontal
-}
-
-# Standard seven-segment encodings for digits 0–9
-_SEG_TO_DIGIT: dict[frozenset, str] = {
-    frozenset("abcdef"):   "0",
-    frozenset("bc"):       "1",
-    frozenset("abdeg"):    "2",
-    frozenset("abcdg"):    "3",
-    frozenset("bcfg"):     "4",
-    frozenset("acdfg"):    "5",
-    frozenset("acdefg"):   "6",
-    frozenset("abc"):      "7",
-    frozenset("abcdefg"):  "8",
-    frozenset("abcdfg"):   "9",
-}
-
+#
+# A seven-segment classifier used to live here: _SEG_REGIONS, _SEG_TO_DIGIT,
+# _find_cells, _read_cell and _classify_seven_segment, about 180 lines. It was
+# defined and never called from anywhere. Recover it from git history if a
+# segment-based reader is ever wanted.
 
 # ── Steps 1 + 2: binarise full image → find display → crop interior ──────────
 
@@ -300,18 +155,24 @@ def _binarise_full(img: np.ndarray) -> tuple[np.ndarray, str]:
     return binary, dtype
 
 
-def _find_display_binary(binary: np.ndarray) -> np.ndarray:
+def _find_display_binary(binary: np.ndarray) -> tuple[np.ndarray, tuple | None, tuple[int, int]]:
     """
     Locate the LCD display window inside the full binary image using
     connected-component bounding boxes, then return a crop with the
     display FRAME removed.
+
+    Returns (cropped, best_box, (offset_x, offset_y)) where the offset is the
+    top-left of `cropped` within `binary`. The offset is NOT derivable from
+    best_box — the crop is inset by the frame padding, and both fallback paths
+    crop by a fixed fraction while reporting no box at all — so callers that
+    need to map coordinates back to the source image must use it.
     """
     h, w = binary.shape
 
     # If image is already a wide digit strip (user cropped tightly), use it as-is.
     # Applying a fixed-fraction crop on an already-tight crop destroys digits.
     if w / (h + 1) > 2.5:
-        return binary, None
+        return binary, None, (0, 0)
     _, _, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
     best_score, best_box = 0.0, None
@@ -339,7 +200,7 @@ def _find_display_binary(binary: np.ndarray) -> np.ndarray:
     if best_box is None:
         y0, y1 = int(h * 0.05), int(h * 0.62)
         x0, x1 = int(w * 0.08), int(w * 0.92)
-        return binary[y0:y1, x0:x1], None
+        return binary[y0:y1, x0:x1], None, (x0, y0)
 
     x, y, cw, ch = best_box
     py = max(8, int(ch * 0.07))
@@ -351,8 +212,8 @@ def _find_display_binary(binary: np.ndarray) -> np.ndarray:
     if cropped.size == 0:
         y0, y1 = int(h * 0.05), int(h * 0.62)
         x0, x1 = int(w * 0.08), int(w * 0.92)
-        return binary[y0:y1, x0:x1], None
-    return cropped, best_box
+        return binary[y0:y1, x0:x1], None, (x0, y0)
+    return cropped, best_box, (x1c, y1c)
 
 
 # ── Step 3: digit band ───────────────────────────────────────────────────────
@@ -385,158 +246,45 @@ def _find_digit_band(binary: np.ndarray) -> tuple[np.ndarray, int]:
     return binary[y_min:y_max, :], y_min
 
 
-# ── Step 4: cell segmentation ─────────────────────────────────────────────────
-
-def _find_cells(band: np.ndarray) -> list[tuple[int, int]]:
+def _prepare_dtrb_crop(img: np.ndarray) -> np.ndarray:
     """
-    Find the column spans of each digit in the digit band.
-    Uses vertical projection; merges small intra-digit gaps;
-    splits cells that are suspiciously wide.
-    Returns list of (x_start, x_end) sorted left-to-right.
+    Tight crop around the digit row, for the trained DTRB models.
+
+    Those models were trained on tightly-cropped digit rows, so feeding them the
+    whole photo reads poorly. The display/digit-band localisation above already
+    solves exactly this, so reuse its coordinates — but slice them out of the
+    original image rather than the binary: the VGG/ResNet backbones can use the
+    greyscale detail that binarising throws away.
+
+    Falls back to the full image whenever localisation fails; unlike the
+    seven-segment path this runs on every request, so it must never raise.
     """
-    h, w = band.shape
-    col_proj = np.sum(band > 0, axis=0).astype(float)
-    mx = col_proj.max()
-    if mx < 2:
-        return []
+    try:
+        work = _upscale(img, min_w=1400)
+        binary_full, _ = _binarise_full(work)
+        binary, _, (dx, dy) = _find_display_binary(binary_full)
+        band, y_off = _find_digit_band(binary)
+        if band.size == 0:
+            return work
 
-    col_s = np.convolve(col_proj, np.ones(3) / 3, mode="same")
-    active = col_s > (mx * 0.10)
+        cols = np.where(np.sum(band > 0, axis=0) > 0)[0]
+        if cols.size == 0:
+            return work
+        x0, x1 = int(cols.min()), int(cols.max()) + 1
+        y0, y1 = y_off, y_off + band.shape[0]
 
-    pad = np.concatenate([[False], active, [False]])
-    chg = np.diff(pad.astype(int))
-    starts = np.where(chg == 1)[0].tolist()
-    ends   = np.where(chg == -1)[0].tolist()
-
-    if not starts:
-        return []
-
-    cells = list(zip(starts, ends))
-
-    avg_w     = float(np.mean([e - s for s, e in cells]))
-    min_gap   = max(2, int(avg_w * 0.22))
-    merged    = [cells[0]]
-    for s, e in cells[1:]:
-        gap = s - merged[-1][1]
-        if gap <= min_gap:
-            merged[-1] = (merged[-1][0], e)
-        else:
-            merged.append((s, e))
-
-    avg_w2 = float(np.mean([e - s for s, e in merged]))
-    dot_thr = avg_w2 * 0.20
-    digit_cells = [(s, e) for s, e in merged if (e - s) > dot_thr]
-
-    widths  = sorted([e - s for s, e in digit_cells])
-    median_w = widths[len(widths) // 2] if widths else avg_w2
-    final = []
-    for s, e in digit_cells:
-        if (e - s) >= median_w * 1.75 and (e - s) > 10:
-            mid = (s + e) // 2
-            final.extend([(s, mid), (mid, e)])
-        else:
-            final.append((s, e))
-
-    return sorted(final)
-
-
-# ── Step 5: read one digit cell ──────────────────────────────────────────────
-
-def _read_cell(cell: np.ndarray) -> tuple[str, float]:
-    """
-    Determine the digit in a binarised cell using segment density analysis.
-    Returns (digit, confidence).  '?' means unrecognised.
-    """
-    ch, cw = cell.shape
-    if ch < 5 or cw < 3:
-        return "?", 0.0
-
-    densities: dict[str, float] = {}
-    for seg, (y0f, y1f, x0f, x1f) in _SEG_REGIONS.items():
-        y0 = max(0, int(ch * y0f));  y1 = min(ch, max(y0 + 1, int(ch * y1f)))
-        x0 = max(0, int(cw * x0f));  x1 = min(cw, max(x0 + 1, int(cw * x1f)))
-        region = cell[y0:y1, x0:x1]
-        densities[seg] = float(np.sum(region > 0) / region.size) if region.size else 0.0
-
-    max_d = max(densities.values())
-    if max_d < 0.07:
-        return "?", 0.0
-
-    thr = max_d * 0.50
-    lit = frozenset(s for s, d in densities.items() if d >= thr)
-
-    if lit in _SEG_TO_DIGIT:
-        return _SEG_TO_DIGIT[lit], 1.0
-
-    best_digit, best_j = "?", 0.0
-    for pattern, digit in _SEG_TO_DIGIT.items():
-        inter = len(lit & pattern)
-        union = len(lit | pattern)
-        j = inter / union if union else 0.0
-        if j > best_j:
-            best_j, best_digit = j, digit
-
-    return (best_digit, best_j) if best_j >= 0.65 else ("?", 0.0)
-
-
-# ── Step 6: full seven-segment reading ───────────────────────────────────────
-
-def _classify_seven_segment(img: np.ndarray) -> tuple[str, float, str]:
-    """
-    Run the full seven-segment pipeline on img.
-    Returns (reading, confidence, display_type).
-    Returns ("", 0.0, display_type) on failure.
-    """
-    img = _upscale(img, min_w=1400)
-
-    binary_full, disp_type = _binarise_full(img)
-
-    if disp_type == "dark":
-        return "", 0.0, "dark"
-
-    binary, disp_box = _find_display_binary(binary_full)
-
-    if disp_box is not None:
-        dx, dy, dcw, dch = disp_box
-        ih, iw = img.shape[:2]
-        disp_orig = img[max(0, dy):min(ih, dy+dch), max(0, dx):min(iw, dx+dcw)]
-        if disp_orig.size > 0:
-            dg = cv2.cvtColor(disp_orig, cv2.COLOR_BGR2GRAY)
-            ddh, ddw = dg.shape
-            actual_mean = float(np.mean(dg[ddh//4:3*ddh//4, ddw//4:3*ddw//4]))
-            if actual_mean < 90:
-                disp_type = "dark"
-                return "", 0.0, disp_type
-
-    band, _ = _find_digit_band(binary)
-    if band.size == 0:
-        return "", 0.0, disp_type
-
-    cells = _find_cells(band)
-    if len(cells) < MIN_DIGITS:
-        cells = _find_cells(binary)
-
-    if not (MIN_DIGITS <= len(cells) <= MAX_DIGITS):
-        return "", 0.0, disp_type
-
-    digits, confs = [], []
-    for s, e in cells:
-        d, c = _read_cell(band[:, s:e])
-        digits.append(d)
-        confs.append(c)
-
-    while digits and digits[0] == "?":
-        digits.pop(0); confs.pop(0)
-    while digits and digits[-1] == "?":
-        digits.pop(); confs.pop()
-
-    valid = [(d, c) for d, c in zip(digits, confs) if d != "?"]
-    if len(valid) < MIN_DIGITS:
-        return "", 0.0, disp_type
-
-    reading = "".join(d for d, _ in valid)
-    avg_conf = float(np.mean([c for _, c in valid]))
-    return reading, avg_conf, disp_type
+        # Band/column coords are relative to the display crop — (dx, dy) shifts
+        # them back into `work` space.
+        pad_y = max(2, int((y1 - y0) * 0.08))
+        pad_x = max(2, int((x1 - x0) * 0.04))
+        crop = work[
+            max(0, dy + y0 - pad_y):min(work.shape[0], dy + y1 + pad_y),
+            max(0, dx + x0 - pad_x):min(work.shape[1], dx + x1 + pad_x),
+        ]
+        return crop if crop.size else work
+    except Exception as exc:
+        logger.warning("DTRB crop preparation failed, using full image: %s", exc)
+        return img
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -658,6 +406,171 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ENSEMBLE  (EasyOCR + the three capstone-trained DTRB models)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# EasyOCR is the anchor; the trained models corroborate it.
+#
+# The capstone benchmark ranked the trained models far above EasyOCR (91 / 84 / 82 %
+# char accuracy vs 14.4 %), but that was measured on a held-out split of the same
+# Roboflow dataset they were trained on. On the real meter photos in uploads/ the
+# ranking inverts: EasyOCR read 087654 exactly right while all three trained models
+# missed, truncating to 4-5 digits ("0870", "000") — they never saw readings this
+# long or these LCD styles in training. Worse, they miss *confidently*: TPS+CTC
+# returned "0870" at 0.998.
+#
+# So a single trained model must never be able to overrule EasyOCR on confidence
+# alone. It takes corroboration: at least this many of them agreeing on the same
+# string. With three models installed that means a majority of them.
+_MIN_TRAINED_VOTES_TO_OVERRIDE = 2
+
+# Ranking weight among the trained models themselves (their benchmark char
+# accuracies live on each variant in ocr_models/inference.py). EasyOCR's weight is
+# only used so its row in the response is comparable; the decision rule below, not
+# this number, is what protects its answer.
+_EASYOCR_STATIC_WEIGHT = 0.90
+
+# Each extra voter that agrees lifts confidence by this much (multiplicative).
+_AGREEMENT_BONUS = 0.05
+_MAX_ENSEMBLE_CONFIDENCE = 0.995
+
+
+def _run_ensemble(img: np.ndarray) -> dict:
+    """
+    Read the meter with every available engine and reconcile them into one answer.
+
+    Voters: EasyOCR (full image, existing pipeline) plus each trained DTRB model
+    that has a checkpoint installed (tight digit crop, which is what they expect).
+
+    Candidates are grouped by exact digit string, and the answer is decided by:
+
+      1. no valid reading anywhere            -> nothing
+      2. EasyOCR has none                     -> best-scoring trained group
+      3. trained models back EasyOCR's string -> that, with an agreement bonus
+      4. >= _MIN_TRAINED_VOTES_TO_OVERRIDE trained models agree on something else
+                                              -> that group overrules EasyOCR
+      5. otherwise                            -> EasyOCR
+
+    Rules 4 and 5 are the point: on the real photos a lone trained model is often
+    both wrong and confident, so overruling EasyOCR takes corroboration from its
+    peers rather than a high score. See the constants above.
+
+    Degrades cleanly — with no checkpoints installed the only voter is EasyOCR and
+    the result matches the previous EasyOCR-only fallback.
+    """
+    dtrb_crop = _prepare_dtrb_crop(img)
+
+    voters: list[dict] = []
+
+    eocr_digits, eocr_conf = _easyocr_read(img)
+    voters.append({
+        "source":              "easyocr",
+        "label":               "EasyOCR",
+        "digits":              eocr_digits,
+        "instance_confidence": round(float(eocr_conf), 4),
+        "static_weight":       _EASYOCR_STATIC_WEIGHT,
+    })
+
+    for variant in _DTRB_VARIANTS:
+        digits, conf = _dtrb_predict(variant.key, dtrb_crop)
+        voters.append({
+            "source":              variant.key,
+            "label":               variant.label,
+            "digits":              digits,
+            "instance_confidence": round(float(conf), 4),
+            "static_weight":       variant.static_weight,
+        })
+
+    for voter in voters:
+        voter["valid"] = bool(voter["digits"]) and _valid(voter["digits"])
+        voter["weighted_score"] = round(
+            voter["static_weight"] * voter["instance_confidence"], 4
+        )
+        voter["chosen"] = False
+
+    scored = [v for v in voters if v["valid"]]
+    if not scored:
+        return {
+            "candidate":   "",
+            "confidence":  0.0,
+            "method":      "ensemble_none",
+            "all_candidates": [],
+            "raw_text":    "ensemble: no engine produced a valid reading",
+            "ensemble_candidates": voters,
+        }
+
+    groups: dict[str, list[dict]] = {}
+    for voter in scored:
+        groups.setdefault(voter["digits"], []).append(voter)
+
+    easyocr_read = next(
+        (v["digits"] for v in scored if v["source"] == "easyocr"), None
+    )
+
+    # Rank the trained models' answers among themselves, best first.
+    trained_groups = sorted(
+        (
+            (digits, [v for v in members if v["source"] != "easyocr"])
+            for digits, members in groups.items()
+        ),
+        key=lambda item: (len(item[1]), sum(v["weighted_score"] for v in item[1])),
+        reverse=True,
+    )
+    best_trained = next(((d, m) for d, m in trained_groups if m), None)
+
+    if easyocr_read is None:
+        winner, decision = best_trained[0], "easyocr found nothing; trained models decided"
+    elif best_trained and best_trained[0] == easyocr_read:
+        winner, decision = easyocr_read, "trained models agreed with easyocr"
+    elif best_trained and len(best_trained[1]) >= _MIN_TRAINED_VOTES_TO_OVERRIDE:
+        winner = best_trained[0]
+        decision = (
+            f"{len(best_trained[1])} trained models overruled easyocr "
+            f"({easyocr_read})"
+        )
+    else:
+        winner, decision = easyocr_read, "easyocr led; no corroborated alternative"
+
+    members = groups[winner]
+    for voter in members:
+        voter["chosen"] = True
+
+    mean_confidence = sum(v["instance_confidence"] for v in members) / len(members)
+    confidence = min(
+        _MAX_ENSEMBLE_CONFIDENCE,
+        mean_confidence * (1.0 + _AGREEMENT_BONUS * (len(members) - 1)),
+    )
+
+    all_candidates = sorted(
+        (
+            {
+                "candidate":  v["digits"],
+                "confidence": v["instance_confidence"],
+                "score":      v["weighted_score"],
+                "variant":    v["source"],
+            }
+            for v in scored
+        ),
+        key=lambda c: c["score"],
+        reverse=True,
+    )
+
+    agreeing = "+".join(sorted(v["source"] for v in members))
+    return {
+        "candidate":   winner,
+        "confidence":  round(confidence, 4),
+        "method":      f"ensemble[{agreeing}]",
+        "all_candidates": all_candidates,
+        "ensemble_decision": decision,
+        "raw_text":    (
+            f"ensemble winner={winner} "
+            f"({len(members)}/{len(scored)} valid engines agreed; {decision})"
+        ),
+        "ensemble_candidates": voters,
+    }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # MAIN PIPELINE
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -666,38 +579,19 @@ def run_ocr(image_path: str) -> dict:
     img = _strip_watermark(raw)
     img = _upscale(img, min_w=1400)
 
-    # ── Primary: Gemini Vision (free) ─────────────────────────────────────
-    gemini_reading, gemini_conf, gemini_raw = _gemini_vision_read(image_path, processed_img=img)
-    if gemini_reading and _valid(gemini_reading):
-        return {
-            "candidate":   gemini_reading,
-            "confidence":  round(gemini_conf, 4),
-            "method":      "gemini_vision",
-            "all_candidates": [{"candidate": gemini_reading, "confidence": round(gemini_conf, 4),
-                                 "score": 999, "variant": "gemini_vision"}],
-            "raw_text":    gemini_raw,
-        }
-    gemini_fail_reason = gemini_raw  # carry forward for raw_text if all methods fail
-
-    # ── Fallback: EasyOCR ─────────────────────────────────────────────────
-    # Pass the full image — the user's crop is already tight around the digits,
-    # so any further fixed-fraction crop would cut off digits.
-    eocr_reading, eocr_conf = _easyocr_read(img)
-
-    if eocr_reading and _valid(eocr_reading):
-        return {
-            "candidate":   eocr_reading,
-            "confidence":  round(eocr_conf, 4),
-            "method":      "easyocr",
-            "all_candidates": [{"candidate": eocr_reading, "confidence": round(eocr_conf, 4),
-                                 "score": round(_score_easyocr(eocr_reading, eocr_conf, 0.15), 2),
-                                 "variant": "easyocr_fallback"}],
-            "raw_text":    f"easyocr_fallback → {eocr_reading}",
-        }
+    # ── EasyOCR anchored by the trained models ────────────────────────────
+    # EasyOCR gets the full image (the user's crop is already tight around the
+    # digits, so cropping further would cut them off); _run_ensemble hands the
+    # trained models their own tight crop.
+    ensemble = _run_ensemble(img)
+    if ensemble["candidate"] and _valid(ensemble["candidate"]):
+        return ensemble
 
     return {
         "candidate": "", "confidence": 0.0, "method": "none",
-        "all_candidates": [], "raw_text": f"no reading found ({gemini_fail_reason})",
+        "all_candidates": [],
+        "raw_text": f"no reading found ({ensemble['raw_text']})",
+        "ensemble_candidates": ensemble.get("ensemble_candidates", []),
     }
 
 
@@ -707,10 +601,9 @@ def run_ocr(image_path: str) -> dict:
 
 def _lcd_correct(digits: str) -> tuple[str, bool, str]:
     """
-    Conservative LCD correction for seven-segment / EasyOCR only.
+    Conservative LCD correction, applied to every ensemble result.
     Only fixes clearly impossible patterns (e.g. "888xx" start where
     three-segment confusion is statistically certain).
-    Do NOT apply to vision AI results.
     """
     if not digits or len(digits) < MIN_DIGITS:
         return digits, False, ""
@@ -732,18 +625,22 @@ def _ambiguous(digits: str, conf: float) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 @router.get("/health")
-def ocr_health_check():
+# Authenticated: this reports the engine inventory and the confidence thresholds,
+# and calling it loads EasyOCR plus every installed checkpoint (~400 MB). As an
+# anonymous endpoint it was both an information leak and a free way to make the
+# server do a lot of work.
+def ocr_health_check(_: User = Depends(get_current_user)):
     try:
         reader = _get_reader()
-        has_gemini = bool(os.environ.get("GEMINI_API_KEY", ""))
-        has_claude = bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+        dtrb_loaded = _dtrb_available()
         return {
             "message":           "OCR route is active",
-            "ocr_engine":        "Gemini Vision (primary) + EasyOCR fallback",
-            "gemini_vision":     has_gemini,
+            "ocr_engine":        "EasyOCR + trained-model ensemble",
             "easyocr_ready":     reader is not None,
-            "primary_method":    "gemini_vision" if has_gemini else "easyocr",
-            "fallback_method":   "easyocr",
+            # Which trained checkpoints are installed; false ones are skipped by
+            # the ensemble. See app/ocr_models/weights/README.md.
+            "dtrb_variants_loaded": dtrb_loaded,
+            "trained_models_installed": sum(dtrb_loaded.values()),
             "min_digits":        MIN_DIGITS,
             "max_digits":        MAX_DIGITS,
             "min_confidence":    MIN_RELIABLE_CONFIDENCE,
@@ -756,7 +653,11 @@ def ocr_health_check():
 
 
 @router.post("/meter-photo")
-async def read_meter_photo(
+# Deliberately a plain `def`, not `async def`. Everything below is synchronous and
+# CPU-bound (disk write, 5 EasyOCR passes, 3 torch forward passes). FastAPI runs
+# `async def` handlers on the event loop, so an async version would freeze every
+# other request for the 5-20s this takes; a plain `def` gets the threadpool.
+def read_meter_photo(
     file: UploadFile = File(...),
     _: User = Depends(require_admin_or_staff),
 ):
@@ -770,8 +671,31 @@ async def read_meter_photo(
     saved_path = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
 
     try:
+        # Stream with a running total rather than shutil.copyfileobj, so an
+        # oversized body is rejected instead of being written to disk in full.
+        written = 0
+
         with saved_path.open("wb") as buf:
-            shutil.copyfileobj(file.file, buf)
+            while True:
+                chunk = file.file.read(UPLOAD_CHUNK_BYTES)
+
+                if not chunk:
+                    break
+
+                written += len(chunk)
+
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        413,
+                        f"Photo is larger than "
+                        f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB. "
+                        "Please upload a smaller image.",
+                    )
+
+                buf.write(chunk)
+
+        if written == 0:
+            raise HTTPException(400, "The uploaded file is empty.")
 
         result      = run_ocr(str(saved_path))
         raw_reading = result["candidate"]
@@ -780,6 +704,10 @@ async def read_meter_photo(
         method      = result["method"]
 
         if not raw_reading:
+            # No reading means no record will be saved, so keeping the photo would
+            # just accumulate orphans.
+            saved_path.unlink(missing_ok=True)
+
             return {
                 "success":       False,
                 "needs_review":  True,
@@ -791,22 +719,17 @@ async def read_meter_photo(
                 "correction_applied":      False,
                 "ocr_accuracy":  0,
                 "raw_text":      result["raw_text"],
-                "image_path":    file.filename or "",
+                # Nothing will reference this photo, so it is cleaned up below.
+                "image_path":    "",
+                "original_filename": file.filename or "",
                 "all_candidates": [],
+                "ensemble_candidates": result.get("ensemble_candidates", []),
                 "review_reason": "No valid meter reading candidate was detected.",
             }
 
-        # Vision AI reads digits correctly — no LCD correction needed
-        if method in ("gemini_vision", "claude_vision"):
-            corrected    = raw_reading
-            changed      = False
-            corr_reason  = ""
-            low_conf     = False
-            ambiguous    = False
-        else:
-            corrected, changed, corr_reason = _lcd_correct(raw_reading)
-            low_conf     = confidence < MIN_RELIABLE_CONFIDENCE
-            ambiguous    = _ambiguous(raw_reading, confidence)
+        corrected, changed, corr_reason = _lcd_correct(raw_reading)
+        low_conf  = confidence < MIN_RELIABLE_CONFIDENCE
+        ambiguous = _ambiguous(raw_reading, confidence)
 
         reading_value = re.sub(r"[^0-9]", "", corrected)
 
@@ -836,15 +759,23 @@ async def read_meter_photo(
             "correction_applied":      changed,
             "ocr_accuracy":            conf_pct,
             "raw_text":                result["raw_text"],
-            "image_path":              file.filename or "",
+            # The path the photo is actually served from, so a saved reading can be
+            # traced back to its evidence. This used to be the raw client filename,
+            # which pointed at nothing because the file was deleted on the way out.
+            "image_path":              f"{UPLOAD_URL_PREFIX}/{saved_path.name}",
+            "original_filename":       file.filename or "",
             "all_candidates":          result["all_candidates"],
+            # What each engine read, and which one the ensemble went with.
+            "ensemble_candidates":     result.get("ensemble_candidates", []),
+            "ensemble_decision":       result.get("ensemble_decision", ""),
             "review_reason":           " ".join(reasons),
             "minimum_reliable_confidence": MIN_RELIABLE_CONFIDENCE,
         }
 
     except HTTPException:
+        # Nothing will reference a rejected upload.
+        saved_path.unlink(missing_ok=True)
         raise
     except Exception as exc:
-        raise HTTPException(500, f"OCR processing failed: {exc}")
-    finally:
         saved_path.unlink(missing_ok=True)
+        raise HTTPException(500, f"OCR processing failed: {exc}")

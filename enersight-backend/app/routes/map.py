@@ -13,29 +13,64 @@ router = APIRouter(
 )
 
 
-def compute_eui(total_consumption, floor_area):
+# Operating bands for energy-use intensity, in kWh per square metre per year.
+# Mirrored on the frontend in src/utils/energyStatus.js; change both together.
+EUI_CRITICAL_THRESHOLD = 20
+EUI_HIGH_THRESHOLD = 10
+
+# Below this many days an extrapolation to a full year is noise, not a signal.
+# Was 28, which left some one-month intervals (they run about 25 to 34 days) judged
+# against yearly thresholds. Mirrored in src/utils/energyStatus.js.
+MIN_DAYS_TO_ANNUALIZE = 20
+DAYS_PER_YEAR = 365
+
+
+def reading_span_days(readings) -> float:
+    """Days between the earliest and latest reading, used to annualise intensity."""
+    dates = [reading.reading_date for reading in readings if reading.reading_date]
+
+    if len(dates) < 2:
+        return 0.0
+
+    span = (max(dates) - min(dates)).total_seconds() / 86400.0
+
+    return span if span > 0 else 0.0
+
+
+def compute_eui(total_consumption, floor_area, span_days: float = 0.0):
+    """Energy-use intensity, annualised when there is enough history to justify it.
+
+    Without annualising, intensity is cumulative and grows forever as readings
+    accumulate, so every building eventually crosses into Critical purely because
+    it has been monitored for longer.
+    """
     if not floor_area or float(floor_area) <= 0:
         return 0
 
     if not total_consumption or float(total_consumption) <= 0:
         return 0
 
-    return float(total_consumption) / float(floor_area)
+    eui = float(total_consumption) / float(floor_area)
+
+    if span_days and span_days >= MIN_DAYS_TO_ANNUALIZE:
+        eui = eui * (DAYS_PER_YEAR / span_days)
+
+    return eui
 
 
-def get_energy_status(total_consumption, floor_area):
-    eui = compute_eui(total_consumption, floor_area)
-
+def get_energy_status(total_consumption, floor_area, span_days: float = 0.0):
     if not total_consumption or float(total_consumption) <= 0:
         return "No Data"
 
     if not floor_area or float(floor_area) <= 0:
         return "No Data"
 
-    if eui > 20:
+    eui = compute_eui(total_consumption, floor_area, span_days)
+
+    if eui > EUI_CRITICAL_THRESHOLD:
         return "Critical"
 
-    if eui > 10:
+    if eui > EUI_HIGH_THRESHOLD:
         return "High"
 
     return "Normal"
@@ -65,8 +100,9 @@ def get_building_map_data(db: Session = Depends(get_db), _: User = Depends(get_c
         )
 
         floor_area = float(building.floor_area or 0)
+        span_days = reading_span_days(building_readings)
 
-        eui = compute_eui(total_consumption, floor_area)
+        eui = compute_eui(total_consumption, floor_area, span_days)
 
         latest_reading = 0
         latest_reading_date = None
@@ -81,10 +117,17 @@ def get_building_map_data(db: Session = Depends(get_db), _: User = Depends(get_c
             latest_reading = float(sorted_readings[0].reading_value or 0)
             latest_reading_date = sorted_readings[0].reading_date
 
+        # Manual readings have no OCR score (NULL, or 0 from older form saves), so
+        # they are left out rather than averaged in as 0% accurate.
+        scored_accuracies = [
+            float(reading.ocr_accuracy)
+            for reading in building_readings
+            if reading.ocr_accuracy and float(reading.ocr_accuracy) > 0
+        ]
+
         average_accuracy = (
-            sum(float(reading.ocr_accuracy or 0) for reading in building_readings)
-            / len(building_readings)
-            if building_readings
+            sum(scored_accuracies) / len(scored_accuracies)
+            if scored_accuracies
             else 0
         )
 
@@ -96,7 +139,7 @@ def get_building_map_data(db: Session = Depends(get_db), _: User = Depends(get_c
             [reading for reading in building_readings if not reading.is_verified]
         )
 
-        energy_status = get_energy_status(total_consumption, floor_area)
+        energy_status = get_energy_status(total_consumption, floor_area, span_days)
 
         map_rows.append(
             {
@@ -159,7 +202,11 @@ def get_map_summary(db: Session = Depends(get_db), _: User = Depends(get_current
 
         building_floor_area = float(building.floor_area or 0)
 
-        status = get_energy_status(building_total, building_floor_area)
+        status = get_energy_status(
+            building_total,
+            building_floor_area,
+            reading_span_days(building_readings),
+        )
 
         if status == "Critical":
             critical_buildings += 1

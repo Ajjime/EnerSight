@@ -31,7 +31,15 @@ class Building(Base):
     building_type = Column(String, nullable=True)
     status = Column(String, default="Active")
 
-    meters = relationship("Meter", back_populates="building")
+    # Meter.building_id is NOT NULL, so without a cascade SQLAlchemy tries to null it
+    # on parent delete and raises IntegrityError. The route still refuses to delete a
+    # building whose meters carry readings, so this only ever removes empty meters.
+    meters = relationship(
+        "Meter", back_populates="building", cascade="all, delete-orphan"
+    )
+    appliances = relationship(
+        "Appliance", back_populates="building", cascade="all, delete-orphan"
+    )
 
 
 class Meter(Base):
@@ -68,23 +76,43 @@ class ConsumptionRecord(Base):
     user = relationship("User", back_populates="consumption_records")
 
 
-class EnergyReport(Base):
-    __tablename__ = "energy_reports"
+class Appliance(Base):
+    __tablename__ = "appliances"
 
-    report_id = Column(Integer, primary_key=True, index=True)
-    building_id = Column(Integer, ForeignKey("buildings.building_id"), nullable=True)
-    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
-    report_type = Column(String, nullable=True)
-    total_consumption = Column(Float, default=0)
-    average_consumption = Column(Float, default=0)
-    peak_consumption = Column(Float, default=0)
-    generated_at = Column(DateTime, default=datetime.utcnow)
+    appliance_id = Column(Integer, primary_key=True, index=True)
+    building_id = Column(Integer, ForeignKey("buildings.building_id"), nullable=False)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    wattage = Column(Float, nullable=False, default=0.0)
+    quantity = Column(Integer, nullable=False, default=1)
+    hours_per_day = Column(Float, nullable=False, default=0.0)
+    days_per_month = Column(Integer, nullable=False, default=30)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    building = relationship("Building", back_populates="appliances")
+
+
+class Setting(Base):
+    __tablename__ = "settings"
+
+    setting_id = Column(Integer, primary_key=True, index=True)
+    key = Column(String, unique=True, index=True, nullable=False)
+    value = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# The EnergyReport model was removed. Reports are computed on demand from
+# consumption_records, so nothing ever read or wrote that table; it only added a
+# phantom entity to the schema. Recover it from git history if stored report
+# snapshots are ever needed.
 
 
 class AccessLog(Base):
+    """Audit trail. Written through app/audit.py."""
+
     __tablename__ = "access_log"
 
     log_id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     action_type = Column(String, nullable=False)
-    log_datetime = Column(DateTime, default=datetime.utcnow)
+    log_datetime = Column(DateTime, default=datetime.utcnow, index=True)

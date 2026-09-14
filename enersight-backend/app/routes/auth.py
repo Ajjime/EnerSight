@@ -4,13 +4,37 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.auth import create_access_token, get_current_user, hash_password, verify_password
+from app import audit
+from app.auth import (
+    create_access_token,
+    get_current_user,
+    hash_password,
+    validate_password,
+    verify_password,
+)
 from app.database import get_db
 from app.models import User
 from app.schemas import LoginRequest, TokenResponse, UserOut
 
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+# Shown after the password has already been verified, so these never leak whether
+# an account exists to someone who cannot authenticate as it.
+INACTIVE_STATUS_MESSAGES = {
+    "Pending": (
+        "Your account is still waiting for administrator approval. "
+        "Please try again once it has been approved."
+    ),
+    "Rejected": (
+        "This account request was declined. "
+        "Please contact your administrator if you think this is a mistake."
+    ),
+    "Inactive": (
+        "This account has been deactivated. Please contact your administrator."
+    ),
+}
 
 
 class MeUpdate(BaseModel):
@@ -35,6 +59,20 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid username or password",
         )
+
+    # Without this the login succeeds and issues a token, then every subsequent
+    # request 401s in get_current_user, leaving the user "signed in" to a broken app.
+    if user.status != "Active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=INACTIVE_STATUS_MESSAGES.get(
+                user.status,
+                "This account is not active. Please contact your administrator.",
+            ),
+        )
+
+    audit.log_action(db, audit.LOGIN, user.user_id)
+    db.commit()
 
     token = create_access_token(
         data={
@@ -87,7 +125,16 @@ def update_me(
             raise HTTPException(status_code=400, detail="Current password is required")
         if not verify_password(update_data.current_password, current_user.password_hash):
             raise HTTPException(status_code=400, detail="Current password is incorrect")
-        current_user.password_hash = hash_password(update_data.new_password)
+
+        new_password = validate_password(update_data.new_password)
+
+        if verify_password(new_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=400,
+                detail="The new password must be different from the current one.",
+            )
+
+        current_user.password_hash = hash_password(new_password)
 
     db.commit()
     db.refresh(current_user)

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
-from ..auth import get_current_user, require_admin
+from .. import audit, models, schemas
+from ..auth import get_current_user, require_admin, require_admin_or_manager
 from ..database import get_db
 from ..models import User
 
@@ -42,7 +42,7 @@ def get_meters(db: Session = Depends(get_db), _: User = Depends(get_current_user
 def create_meter(
     meter: schemas.MeterCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin_or_manager),
 ):
     building = (
         db.query(models.Building)
@@ -65,6 +65,13 @@ def create_meter(
     new_meter = models.Meter(**meter.model_dump())
 
     db.add(new_meter)
+    db.flush()
+    audit.log_action(
+        db,
+        audit.METER_CREATED,
+        current_user.user_id,
+        f"#{new_meter.meter_id} {new_meter.serial_no}",
+    )
     db.commit()
     db.refresh(new_meter)
 
@@ -90,7 +97,7 @@ def update_meter(
     meter_id: int,
     updated_meter: schemas.MeterCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin_or_manager),
 ):
     meter = db.query(models.Meter).filter(models.Meter.meter_id == meter_id).first()
 
@@ -121,6 +128,10 @@ def update_meter(
     for key, value in updated_meter.model_dump().items():
         setattr(meter, key, value)
 
+    audit.log_action(
+        db, audit.METER_UPDATED, current_user.user_id, f"#{meter.meter_id} {meter.serial_no}"
+    )
+
     db.commit()
     db.refresh(meter)
 
@@ -131,7 +142,7 @@ def update_meter(
 def delete_meter(
     meter_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     meter = db.query(models.Meter).filter(models.Meter.meter_id == meter_id).first()
 
@@ -152,6 +163,10 @@ def delete_meter(
                 "Delete the related readings first, or keep the meter for record history."
             ),
         )
+
+    audit.log_action(
+        db, audit.METER_DELETED, current_user.user_id, f"#{meter.meter_id} {meter.serial_no}"
+    )
 
     db.delete(meter)
     db.commit()

@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import audit, models, schemas
 from ..auth import get_current_user, require_admin, require_admin_or_manager, require_admin_or_staff
 from ..database import get_db
 from ..models import User
@@ -10,6 +12,57 @@ router = APIRouter(
     prefix="/readings",
     tags=["Consumption Readings"],
 )
+
+
+def to_naive_utc(value: datetime) -> datetime:
+    """The reading_date column is naive, but clients send ISO strings with a 'Z'
+    suffix which Pydantic parses as tz-aware. Normalise so comparisons and stores
+    don't mix the two and raise TypeError."""
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def apply_reading_rules(reading_data: dict) -> dict:
+    """Shared validation for create and update.
+
+    A meter face only counts up, so a present reading below the previous one is a
+    typo or a misread photo. Accepting it would be silently destructive:
+    reading_differential clamps the negative to 0, so the period reads as zero
+    consumption and the next reading's differential is computed against a bad base.
+    """
+    present = float(reading_data.get("reading_value") or 0.0)
+    previous = float(reading_data.get("previous_reading") or 0.0)
+
+    if present < previous:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reading {present:,.2f} is lower than the previous reading "
+                f"{previous:,.2f}. A meter only counts up, so please re-check the "
+                "photo or correct the value before saving."
+            ),
+        )
+
+    # Backdating is allowed and necessary for historical data. Post-dating is not.
+    reading_date = reading_data.get("reading_date")
+
+    if reading_date is None:
+        # Drop the key entirely: passing None explicitly would write NULL and
+        # bypass the column's utcnow default.
+        reading_data.pop("reading_date", None)
+    else:
+        reading_date = to_naive_utc(reading_date)
+
+        if reading_date > datetime.utcnow():
+            raise HTTPException(
+                status_code=400,
+                detail="Reading date cannot be in the future.",
+            )
+
+        reading_data["reading_date"] = reading_date
+
+    return reading_data
 
 
 def get_last_reading_value(db: Session, meter_id: int):
@@ -61,7 +114,7 @@ def get_readings(db: Session = Depends(get_db), _: User = Depends(get_current_us
 def create_reading(
     reading: schemas.ReadingCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin_or_staff),
+    current_user: User = Depends(require_admin_or_staff),
 ):
     meter = (
         db.query(models.Meter)
@@ -72,16 +125,6 @@ def create_reading(
     if not meter:
         raise HTTPException(status_code=404, detail="Meter not found")
 
-    if reading.user_id is not None:
-        user = (
-            db.query(models.User)
-            .filter(models.User.user_id == reading.user_id)
-            .first()
-        )
-
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
     last_value, has_prior = get_last_reading_value(db, reading.meter_id)
     reading_data = reading.model_dump()
 
@@ -90,9 +133,22 @@ def create_reading(
     elif reading_data.get("previous_reading") is None:
         reading_data["previous_reading"] = 0.0
 
+    reading_data = apply_reading_rules(reading_data)
+
+    # Attribution comes from the token, never from the request body.
+    reading_data["user_id"] = current_user.user_id
+
     new_reading = models.ConsumptionRecord(**reading_data)
 
     db.add(new_reading)
+    db.flush()
+    audit.log_action(
+        db,
+        audit.READING_CREATED,
+        current_user.user_id,
+        f"#{new_reading.record_id} meter={new_reading.meter_id} "
+        f"value={new_reading.reading_value}",
+    )
     db.commit()
     db.refresh(new_reading)
 
@@ -122,7 +178,7 @@ def update_reading(
     record_id: int,
     updated_reading: schemas.ReadingCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin_or_manager),
+    current_user: User = Depends(require_admin_or_manager),
 ):
     reading = (
         db.query(models.ConsumptionRecord)
@@ -142,18 +198,19 @@ def update_reading(
     if not meter:
         raise HTTPException(status_code=404, detail="Meter not found")
 
-    if updated_reading.user_id is not None:
-        user = (
-            db.query(models.User)
-            .filter(models.User.user_id == updated_reading.user_id)
-            .first()
-        )
+    # user_id and is_verified are no longer accepted as input, so an edit can no
+    # longer reassign who recorded a reading, nor silently unverify it by omitting
+    # the field (the schema default used to be False).
+    #
+    # Popping an omitted reading_date keeps the record's existing timestamp.
+    reading_data = apply_reading_rules(updated_reading.model_dump())
 
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-
-    for key, value in updated_reading.model_dump().items():
+    for key, value in reading_data.items():
         setattr(reading, key, value)
+
+    audit.log_action(
+        db, audit.READING_UPDATED, current_user.user_id, f"#{reading.record_id}"
+    )
 
     db.commit()
     db.refresh(reading)
@@ -165,7 +222,7 @@ def update_reading(
 def verify_reading(
     record_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin_or_manager),
+    current_user: User = Depends(require_admin_or_manager),
 ):
     reading = (
         db.query(models.ConsumptionRecord)
@@ -178,6 +235,10 @@ def verify_reading(
 
     reading.is_verified = True
 
+    audit.log_action(
+        db, audit.READING_VERIFIED, current_user.user_id, f"#{reading.record_id}"
+    )
+
     db.commit()
     db.refresh(reading)
 
@@ -188,7 +249,7 @@ def verify_reading(
 def mark_reading_for_review(
     record_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin_or_manager),
+    current_user: User = Depends(require_admin_or_manager),
 ):
     reading = (
         db.query(models.ConsumptionRecord)
@@ -201,6 +262,10 @@ def mark_reading_for_review(
 
     reading.is_verified = False
 
+    audit.log_action(
+        db, audit.READING_UNVERIFIED, current_user.user_id, f"#{reading.record_id}"
+    )
+
     db.commit()
     db.refresh(reading)
 
@@ -211,7 +276,7 @@ def mark_reading_for_review(
 def delete_reading(
     record_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(require_admin),
+    current_user: User = Depends(require_admin),
 ):
     reading = (
         db.query(models.ConsumptionRecord)
@@ -221,6 +286,13 @@ def delete_reading(
 
     if not reading:
         raise HTTPException(status_code=404, detail="Reading not found")
+
+    audit.log_action(
+        db,
+        audit.READING_DELETED,
+        current_user.user_id,
+        f"#{reading.record_id} meter={reading.meter_id} value={reading.reading_value}",
+    )
 
     db.delete(reading)
     db.commit()
