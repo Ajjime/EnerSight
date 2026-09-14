@@ -11,7 +11,9 @@ import {
   Gauge,
   Map as MapIcon,
   MapPinned,
+  Minus,
   ScanLine,
+  TrendingDown,
   TrendingUp,
   XCircle,
   Zap,
@@ -22,23 +24,14 @@ import MiniEnergyMap from "../components/MiniEnergyMap";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import HeaderActionButton from "../components/HeaderActionButton";
+import ForecastChart, { ForecastLegend } from "../components/ForecastChart";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import {
   MONTH_LABELS,
-  buildForecastSeries,
+  buildForecastModel,
+  getForecastDirection,
   getNextMonthLabelsFromKey,
 } from "../utils/forecast";
-import {
-  Bar,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
@@ -193,52 +186,9 @@ function getDotClass(status) {
   return "bg-slate-400";
 }
 
-// ─── Prediction Utilities ────────────────────────────────────────────────────
-
-/**
- * Builds combined chart data: historical months (actual) + forecast months (ma + linear).
- * Connects the lines at the last historical point as a bridge.
- */
-function buildForecastChartData(monthlyConsumption, horizon = 3) {
-  // Year-aware labels, so a forecast that crosses into January is not confused
-  // with the previous January already on the axis.
-  return buildForecastSeries(monthlyConsumption, horizon, (lastPoint, count) =>
-    getNextMonthLabelsFromKey(lastPoint.sortKey, count)
-  );
-}
-
 // ─── EnergyForecastCard ───────────────────────────────────────────────────────
 
-function ForecastTooltip({ active, payload, label, chartData }) {
-  if (!active || !payload || payload.length === 0) return null;
-  const isForecast = chartData.find((d) => d.month === label)?.isForecast;
-  const filtered = payload.filter((e) => e.value !== null && e.value !== undefined);
-  return (
-    <div className="rounded-xl border border-slate-100 bg-white px-3 py-2.5 shadow-xl min-w-[150px]">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="text-[11px] font-medium text-slate-700">{label}</span>
-        {isForecast && (
-          <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-medium text-emerald-700">
-            Predicted
-          </span>
-        )}
-      </div>
-      {filtered.map((entry) => (
-        <div key={entry.dataKey} className="flex items-center justify-between gap-3 mt-1">
-          <div className="flex items-center gap-1">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: entry.color }} />
-            <span className="text-[10px] font-normal text-slate-400">
-              {entry.dataKey === "actual" ? "Actual" : entry.dataKey === "ma" ? "Avg." : "Trend"}
-            </span>
-          </div>
-          <span className="text-[11px] font-medium text-slate-700">{formatNumber(entry.value)} kWh</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EnergyForecastCard({ monthlyConsumption }) {
+function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
   const HORIZON = 3;
   const [visible, setVisible] = React.useState(false);
 
@@ -247,21 +197,29 @@ function EnergyForecastCard({ monthlyConsumption }) {
     return () => window.clearTimeout(timer);
   }, []);
 
-  const data = useMemo(
-    () => buildForecastChartData(monthlyConsumption, HORIZON),
+  // The same back-tested model as the Analytics page. This card used to show a
+  // moving average and a linear trend side by side (10,103 vs 11,562 kWh on the
+  // demo data) with nothing to say which one to believe.
+  const model = useMemo(
+    () =>
+      buildForecastModel(monthlyConsumption, HORIZON, (lastPoint, count) =>
+        getNextMonthLabelsFromKey(lastPoint.sortKey, count)
+      ),
     [monthlyConsumption]
   );
 
-  const forecastMonths = data.filter((d) => d.isForecast);
-  const historicalData = data.filter((d) => !d.isForecast && d.actual !== null);
-  const lastActual     = historicalData.slice(-1)[0]?.actual ?? 0;
-  const nextMa         = forecastMonths[0]?.ma ?? 0;
-  const nextLinear     = forecastMonths[0]?.linear ?? 0;
-  const hasForecast    = data.length > 0 && forecastMonths.length > 0;
-  const firstForecast  = forecastMonths[0]?.month ?? "";
-  const bridgeMonth    = data.find((d) => !d.isForecast && d.ma !== null)?.month;
-  const maDiff         = lastActual > 0 ? ((nextMa - lastActual) / lastActual) * 100 : 0;
-  const linearDiff     = lastActual > 0 ? ((nextLinear - lastActual) / lastActual) * 100 : 0;
+  const bestMethod = model?.methods.find((method) => method.key === model.bestKey);
+  const nextMonth = model?.series.find((row) => row.isForecast);
+  const lastMonth = model?.series.filter((row) => !row.isForecast).at(-1);
+  const nextValue = nextMonth && model ? nextMonth[model.bestKey] : 0;
+  const lastActual = lastMonth?.actual ?? 0;
+  const nextChange = lastActual > 0 ? ((nextValue - lastActual) / lastActual) * 100 : 0;
+  const direction = getForecastDirection(model).label;
+  const DirectionIcon =
+    direction === "Rising" ? TrendingUp : direction === "Falling" ? TrendingDown : Minus;
+  const otherMethods = model
+    ? model.methods.filter((method) => method.available && method.key !== model.bestKey)
+    : [];
 
   return (
     <div
@@ -272,122 +230,91 @@ function EnergyForecastCard({ monthlyConsumption }) {
         transition: "opacity 440ms ease, transform 440ms ease",
       }}
     >
-      {/* ── Header row ── */}
-      <div className="mb-4 flex items-center justify-between gap-4">
+      <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-            <TrendingUp size={11} />
-            Forecast
+            <DirectionIcon size={11} />
+            Forecast{model ? ` · ${direction}` : ""}
           </div>
           <h2 className="text-base font-semibold text-slate-950">Energy Forecast</h2>
-          <p className="text-xs font-normal text-slate-400">Predicted usage for the next {HORIZON} months.</p>
+          <p className="text-xs font-normal text-slate-400">
+            Next {HORIZON} months, led by the estimate that tested best.
+          </p>
         </div>
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-emerald-700 text-white shadow-sm">
-          <TrendingUp size={19} />
-        </div>
+
+        {onOpenAnalytics && (
+          <button
+            type="button"
+            onClick={onOpenAnalytics}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            Full forecast
+            <ArrowRight size={14} />
+          </button>
+        )}
       </div>
 
-      {!hasForecast ? (
+      {!model ? (
         <div className="rounded-2xl border border-slate-100 bg-slate-50 py-5 text-center text-sm font-semibold text-slate-400">
-          Add more meter readings to see predictions.
+          Forecasts need readings in at least 3 different months.
         </div>
       ) : (
         <>
-          {/* ── Stat row ── */}
-          <div
-            className="mb-4 grid grid-cols-2 gap-2"
-            style={{
-              opacity: visible ? 1 : 0,
-              transition: "opacity 400ms ease 150ms",
-            }}
-          >
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
-              <p className="text-[10px] font-medium text-emerald-600">Avg. Estimate · {firstForecast}</p>
+          <div className="mb-4 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+              <p className="text-[10px] font-medium text-emerald-600">
+                {nextMonth.month} · {bestMethod.label}
+              </p>
               <p className="mt-1 text-xl font-semibold text-emerald-800">
-                {formatNumber(nextMa)}
+                {formatNumber(nextValue)}
                 <span className="ml-1 text-xs font-medium text-emerald-500">kWh</span>
+                <span className="ml-2 text-sm font-semibold text-emerald-700">
+                  {formatPeso(nextValue * rate, { decimals: 0 })}
+                </span>
               </p>
               <div className="mt-1 flex items-center gap-1.5">
-                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${maDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-white text-emerald-600"}`}>
-                  {maDiff >= 0 ? "↑" : "↓"} {Math.abs(maDiff).toFixed(1)}%
+                <span
+                  className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
+                    nextChange >= 0
+                      ? "border-red-100 bg-red-50 text-red-500"
+                      : "border-emerald-100 bg-white text-emerald-600"
+                  }`}
+                >
+                  {nextChange >= 0 ? "↑" : "↓"} {Math.abs(nextChange).toFixed(1)}%
                 </span>
-                <span className="text-[9px] font-normal text-slate-400">vs last month</span>
+                <span className="text-[9px] font-normal text-slate-400">
+                  vs {lastMonth.month}
+                </span>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:shadow-md">
-              <p className="text-[10px] font-medium text-slate-500">Trend Estimate · {firstForecast}</p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">
-                {formatNumber(nextLinear)}
-                <span className="ml-1 text-xs font-medium text-slate-400">kWh</span>
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <p className="text-[10px] font-medium text-slate-500">Why this estimate</p>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                {bestMethod.error !== null
+                  ? `Closest when tested on the last ${model.testedMonths} month${
+                      model.testedMonths === 1 ? "" : "s"
+                    }: off by ${Math.round(bestMethod.error * 100)}% on average.`
+                  : "Not enough history to test the estimates yet, so the moving average leads."}
               </p>
-              <div className="mt-1 flex items-center gap-1.5">
-                <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${linearDiff >= 0 ? "border-red-100 bg-red-50 text-red-500" : "border-emerald-100 bg-emerald-50 text-emerald-600"}`}>
-                  {linearDiff >= 0 ? "↑" : "↓"} {Math.abs(linearDiff).toFixed(1)}%
-                </span>
-                <span className="text-[9px] font-normal text-slate-400">vs last month</span>
-              </div>
+              {otherMethods.length > 0 && (
+                <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                  {otherMethods
+                    .map((method) => `${method.label}: ${formatNumber(nextMonth[method.key])} kWh`)
+                    .join(" · ")}
+                </p>
+              )}
             </div>
           </div>
 
-          {/* ── Legend ── */}
-          <div
-            className="mb-2 flex flex-wrap items-center gap-3"
-            style={{ opacity: visible ? 1 : 0, transition: "opacity 400ms ease 250ms" }}
-          >
-            <div className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-600" />
-              <span className="text-[10px] font-medium text-slate-400">Actual</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="block h-0 w-4" style={{ borderTop: "2px dashed #059669" }} />
-              <span className="text-[10px] font-medium text-slate-400">Avg. Est.</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <span className="block h-0 w-4" style={{ borderTop: "2px dashed #94a3b8" }} />
-              <span className="text-[10px] font-medium text-slate-400">Trend Est.</span>
-            </div>
-            {bridgeMonth && (
-              <span className="ml-auto rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-600">
-                Predicted from {bridgeMonth}
-              </span>
-            )}
-          </div>
+          <ForecastLegend model={model} className="mb-2" />
 
-          {/* ── Chart ── */}
-          <div
+          <ForecastChart
+            model={model}
             className="h-44"
-            style={{ opacity: visible ? 1 : 0, transition: "opacity 450ms ease 300ms" }}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-                <defs>
-                  <linearGradient id="fBarGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#059669" stopOpacity={0.85} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0.35} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="month" tick={{ fontSize: 10, fontWeight: 700, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fontWeight: 700, fill: "#94a3b8" }} axisLine={false} tickLine={false} width={48} />
-                <Tooltip content={<ForecastTooltip chartData={data} />} cursor={{ fill: "rgba(16,185,129,0.04)" }} />
-                {bridgeMonth && (
-                  <ReferenceLine x={bridgeMonth} stroke="#cbd5e1" strokeWidth={1.5} strokeDasharray="4 3" />
-                )}
-                <Bar dataKey="actual" fill="url(#fBarGrad)" radius={[4, 4, 0, 0]} maxBarSize={32} isAnimationActive animationDuration={700} animationEasing="ease-out" />
-                <Line type="monotone" dataKey="ma" stroke="#059669" strokeWidth={2} strokeDasharray="7 4" dot={{ r: 3.5, fill: "#059669", stroke: "#fff", strokeWidth: 2 }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive animationDuration={850} animationEasing="ease-out" />
-                <Line type="monotone" dataKey="linear" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3.5, fill: "#94a3b8", stroke: "#fff", strokeWidth: 2 }} activeDot={{ r: 5 }} connectNulls={false} isAnimationActive animationDuration={1050} animationEasing="ease-out" />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* ── Note ── */}
-          <p
-            className="mt-3 text-[10px] font-normal leading-4 text-slate-400"
-            style={{ opacity: visible ? 1 : 0, transition: "opacity 400ms ease 450ms" }}
-          >
-            Based on saved meter readings. Avg. uses last 3 months · Trend follows usage direction.
-          </p>
+            gradientId="dashboardForecastBar"
+            angledLabels={false}
+          />
         </>
       )}
     </div>
@@ -1316,7 +1243,11 @@ export default function Dashboard({ role, setCurrentPage }) {
       </section>
 
       <section>
-        <EnergyForecastCard monthlyConsumption={monthlyConsumption} />
+        <EnergyForecastCard
+          monthlyConsumption={monthlyConsumption}
+          rate={rate}
+          onOpenAnalytics={() => setCurrentPage && setCurrentPage("analytics")}
+        />
       </section>
 
       <section className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">

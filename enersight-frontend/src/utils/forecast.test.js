@@ -9,6 +9,7 @@ import {
   computeMovingAvgForecast,
   computeSeasonalForecast,
   fillMonthGaps,
+  getForecastDirection,
   getNextMonthLabels,
   getNextMonthLabelsFromKey,
 } from "./forecast";
@@ -245,5 +246,23 @@ describe("buildForecastModel", () => {
     const model = buildForecastModel(points, 1, labelsFromKey);
 
     expect(model.series[1]).toMatchObject({ month: "Feb 2026", actual: 0, isGap: true });
+  });
+});
+
+describe("getForecastDirection", () => {
+  it("is steady without a model", () => {
+    expect(getForecastDirection(null)).toEqual({ label: "Steady", change: 0 });
+  });
+
+  it("follows the leading estimate against the last three real months", () => {
+    const rising = buildForecastModel(monthlyPoints("2026-01", [100, 200, 300, 400, 500, 600]), 3, labelsFromKey);
+    const falling = buildForecastModel(monthlyPoints("2026-01", [600, 500, 400, 300, 200, 100]), 3, labelsFromKey);
+    const flat = buildForecastModel(monthlyPoints("2026-01", [100, 100, 100, 100]), 3, labelsFromKey);
+
+    expect(getForecastDirection(rising).label).toBe("Rising");
+    expect(getForecastDirection(falling).label).toBe("Falling");
+    // A tie between estimates goes to the moving average, listed first.
+    expect(flat.bestKey).toBe("average");
+    expect(getForecastDirection(flat)).toEqual({ label: "Steady", change: 0 });
   });
 });

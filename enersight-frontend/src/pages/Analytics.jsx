@@ -23,8 +23,10 @@ import PageHeader from "../components/PageHeader";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { applianceKwhMonth, formatPeso } from "../utils/currency";
 import {
+  FORECAST_COLORS,
   buildForecastModel,
   fillMonthGaps,
+  getForecastDirection,
   getNextMonthLabelsFromKey,
 } from "../utils/forecast";
 import {
@@ -34,8 +36,6 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
-  ComposedChart,
-  Line,
   Pie,
   PieChart,
   ReferenceLine,
@@ -71,6 +71,7 @@ import {
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import SkeletonRows from "../components/SkeletonRows";
+import ForecastChart, { ForecastLegend } from "../components/ForecastChart";
 import {
   PERIOD_OPTIONS,
   getPeriodWindows,
@@ -101,12 +102,6 @@ const COMPARISON_SUBTITLES = {
   kwh: "Total energy consumption by building.",
   eui: "Energy use per square metre per year, the basis of each status.",
   cost: "Estimated electricity cost by building.",
-};
-
-const FORECAST_COLORS = {
-  average: "#059669",
-  trend: "#64748b",
-  seasonal: "#d97706",
 };
 
 function normalizeBuilding(building) {
@@ -427,37 +422,6 @@ function ComparisonTooltip({ active, payload, label }) {
       <span className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${getStatusStyle(row.status)}`}>
         {row.status}
       </span>
-    </div>
-  );
-}
-
-function ForecastTooltip({ active, payload, label, model }) {
-  if (!active || !payload || payload.length === 0) return null;
-  const point = payload[0]?.payload;
-  if (!point) return null;
-  return (
-    <div className="min-w-[200px] rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-xl">
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
-        {label}
-        {point.isForecast && (
-          <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700 normal-case">
-            Forecast
-          </span>
-        )}
-      </p>
-      {!point.isForecast && (
-        <p className="text-xs font-semibold text-slate-950">
-          {point.isGap ? "No readings recorded" : `Actual: ${formatNumber(point.actual)} kWh`}
-        </p>
-      )}
-      {model.methods
-        .filter((method) => method.available && point[method.key] !== null && point[method.key] !== undefined)
-        .map((method) => (
-          <p key={method.key} style={{ color: FORECAST_COLORS[method.key] }} className="mt-1 text-xs font-medium">
-            {method.label}
-            {method.key === model.bestKey ? " (leading)" : ""}: {formatNumber(point[method.key])} kWh
-          </p>
-        ))}
     </div>
   );
 }
@@ -952,18 +916,7 @@ const Analytics = () => {
   // ── Forecast ──
   const bestMethod = forecastModel?.methods.find((m) => m.key === forecastModel.bestKey);
   const forecastPoints = forecastModel ? forecastModel.series.filter((d) => d.isForecast) : [];
-  const bridgeForecastMonth = forecastModel
-    ? forecastModel.series.filter((d) => !d.isForecast).at(-1)?.month
-    : undefined;
-  const forecastAverage = bestMethod?.projection
-    ? bestMethod.projection.reduce((sum, value) => sum + value, 0) / bestMethod.projection.length
-    : 0;
-  const forecastChange =
-    forecastModel && forecastModel.recentAverage > 0
-      ? (forecastAverage - forecastModel.recentAverage) / forecastModel.recentAverage
-      : 0;
-  const forecastDirection =
-    forecastChange > 0.03 ? "Rising" : forecastChange < -0.03 ? "Falling" : "Steady";
+  const forecastDirection = getForecastDirection(forecastModel).label;
   const ForecastIcon =
     forecastDirection === "Rising" ? TrendingUp : forecastDirection === "Falling" ? TrendingDown : Minus;
   const trendFit = forecastModel?.trendFit ?? 0;
@@ -1579,111 +1532,9 @@ const Analytics = () => {
               ))}
             </div>
 
-            <div className="mb-3 flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-1.5">
-                <span className="h-2 w-2 rounded-full bg-emerald-600" />
-                <span className="text-[10px] font-medium text-slate-400">Actual</span>
-              </div>
-              {forecastModel.methods
-                .filter((method) => method.available)
-                .map((method) => (
-                  <div key={method.key} className="flex items-center gap-1.5">
-                    <span
-                      className="block h-0 w-5"
-                      style={{
-                        borderTop: `${method.key === forecastModel.bestKey ? 2.5 : 2}px dashed ${FORECAST_COLORS[method.key]}`,
-                      }}
-                    />
-                    <span className="text-[10px] font-medium text-slate-400">
-                      {method.label}
-                      {method.key === forecastModel.bestKey ? " (leading)" : ""}
-                    </span>
-                  </div>
-                ))}
-              {bridgeForecastMonth && (
-                <span className="ml-auto rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-600">
-                  Predicted from {bridgeForecastMonth}
-                </span>
-              )}
-            </div>
+            <ForecastLegend model={forecastModel} className="mb-3" />
 
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart
-                  data={forecastModel.series}
-                  margin={{ top: 4, right: 4, bottom: 0, left: 0 }}
-                >
-                  <defs>
-                    <linearGradient id="analyticsForecastBar" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#059669" stopOpacity={0.8} />
-                      <stop offset="100%" stopColor="#10b981" stopOpacity={0.3} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="4 4" vertical={false} stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="month"
-                    tick={{ fontSize: 10, fontWeight: 600, fill: "#94a3b8" }}
-                    interval={0}
-                    angle={-25}
-                    textAnchor="end"
-                    height={36}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 10, fontWeight: 600, fill: "#94a3b8" }}
-                    tickFormatter={formatCompact}
-                    axisLine={false}
-                    tickLine={false}
-                    width={48}
-                  />
-                  <Tooltip
-                    content={<ForecastTooltip model={forecastModel} />}
-                    cursor={{ fill: "rgba(16,185,129,0.04)" }}
-                  />
-                  {bridgeForecastMonth && (
-                    <ReferenceLine
-                      x={bridgeForecastMonth}
-                      stroke="#cbd5e1"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 3"
-                    />
-                  )}
-                  <Bar
-                    dataKey="actual"
-                    fill="url(#analyticsForecastBar)"
-                    radius={[6, 6, 0, 0]}
-                    maxBarSize={28}
-                    isAnimationActive
-                    animationDuration={700}
-                    animationEasing="ease-out"
-                  />
-                  {forecastModel.methods
-                    .filter((method) => method.available)
-                    .map((method) => {
-                      const isBest = method.key === forecastModel.bestKey;
-                      return (
-                        <Line
-                          key={method.key}
-                          type="monotone"
-                          dataKey={method.key}
-                          name={method.label}
-                          stroke={FORECAST_COLORS[method.key]}
-                          strokeWidth={isBest ? 2.5 : 1.75}
-                          strokeOpacity={isBest ? 1 : 0.7}
-                          strokeDasharray={isBest ? "7 4" : "3 3"}
-                          dot={{ r: isBest ? 3.5 : 2.5, fill: FORECAST_COLORS[method.key], stroke: "#fff", strokeWidth: 2 }}
-                          activeDot={{ r: 5 }}
-                          connectNulls={false}
-                          isAnimationActive
-                          animationDuration={850}
-                          animationEasing="ease-out"
-                        />
-                      );
-                    })}
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
+            <ForecastChart model={forecastModel} className="h-56" gradientId="analyticsForecastBar" />
 
             <p className="mt-3 text-[10px] font-normal leading-4 text-slate-400">
               Moving average: mean of the last 3 months. Linear trend: a straight line

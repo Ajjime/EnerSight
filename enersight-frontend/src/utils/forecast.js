@@ -1,7 +1,9 @@
 // Shared consumption forecasting used by the Dashboard and Analytics pages.
-// Both draw the same two estimates over historical monthly totals:
-//   · Moving average — flat projection of the last N months
-//   · Linear trend   — least-squares fit extended forward
+// Both build the same model (buildForecastModel) over historical monthly totals
+// and lead with whichever estimate tested best on recent months:
+//   · Moving average       — flat projection of the last N months
+//   · Linear trend         — least-squares fit extended forward
+//   · Same month last year — last year's month, scaled by recent growth
 //
 // Two things this deliberately gets right, having previously got them wrong:
 //
@@ -42,6 +44,15 @@ export const MONTH_LABELS = [
 // Two points define a line exactly and say nothing about trend. Three is the
 // minimum at which a fit carries any information; say so on the slide.
 export const MIN_MONTHS_FOR_FORECAST = 3;
+
+// Chart colour for each estimate, shared by every forecast chart, legend and
+// method chip. Kept here rather than in ForecastChart.jsx because a component
+// file that also exports constants breaks React fast refresh.
+export const FORECAST_COLORS = {
+  average: "#059669",
+  trend: "#64748b",
+  seasonal: "#d97706",
+};
 
 /** "YYYY-MM" -> absolute month number, for arithmetic across year boundaries. */
 function sortKeyToMonthIndex(sortKey) {
@@ -372,7 +383,7 @@ function prepareForecastSeries(points) {
  * forecasting them from the months before. That is a claim anyone can check, unlike
  * showing two disagreeing numbers with nothing to say which one to believe.
  *
- * Returns null when there is not enough history, like buildForecastSeries's [].
+ * Returns null when there is not enough history to forecast responsibly.
  *
  * @returns {{
  *   series: Array<{ month, actual, average, trend, seasonal, isGap, isForecast }>,
@@ -474,49 +485,24 @@ export function buildForecastModel(points, horizon, buildFutureLabels) {
 }
 
 /**
- * Combines historical months with `horizon` forecast months into one series.
- * Both estimates are also written onto the last historical point so the dashed
- * forecast lines visually bridge from the actual bars.
+ * Whether the leading estimate points up, down or flat compared with the last
+ * three real months. Within 3% either way counts as steady.
  *
- * Returns [] when there is not enough history to forecast responsibly, so callers
- * should show their "add more readings" empty state on an empty array.
- *
- * @param points            [{ month, value, sortKey? }] ordered oldest to newest.
- * @param horizon           How many months to project.
- * @param buildFutureLabels (lastPoint, horizon) => string[] label generator.
- * @returns [{ month, actual, ma, linear, isForecast }]
+ * @returns {{ label: "Rising" | "Falling" | "Steady", change: number }}
  */
-export function buildForecastSeries(points, horizon, buildFutureLabels) {
-  const series = prepareForecastSeries(points);
+export function getForecastDirection(model) {
+  const best = model?.methods.find((method) => method.key === model.bestKey);
 
-  if (!series) {
-    return [];
+  if (!best?.projection?.length || !(model.recentAverage > 0)) {
+    return { label: "Steady", change: 0 };
   }
 
-  const values = series.map((point) => point.value);
-  const maForecast = computeMovingAvgForecast(values, 3, horizon);
-  const linearForecast = computeLinearForecast(values, horizon);
-  const lastPoint = series[series.length - 1];
-  const futureLabels = buildFutureLabels(lastPoint, horizon);
+  const average =
+    best.projection.reduce((sum, value) => sum + value, 0) / best.projection.length;
+  const change = (average - model.recentAverage) / model.recentAverage;
 
-  const historical = series.map((point, idx) => {
-    const isLast = idx === series.length - 1;
-    return {
-      month: point.month,
-      actual: point.value,
-      ma: isLast ? maForecast[0] : null,
-      linear: isLast ? linearForecast[0] : null,
-      isForecast: false,
-    };
-  });
-
-  const forecast = futureLabels.map((month, i) => ({
-    month,
-    actual: null,
-    ma: maForecast[i],
-    linear: linearForecast[i],
-    isForecast: true,
-  }));
-
-  return [...historical, ...forecast];
+  return {
+    label: change > 0.03 ? "Rising" : change < -0.03 ? "Falling" : "Steady",
+    change,
+  };
 }
