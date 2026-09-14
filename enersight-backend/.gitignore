@@ -41,6 +41,13 @@ lib64/
 uploads/
 meter_photos/
 
+# Generated OCR evaluation output. The labelled photos and labels.csv under
+# eval_data/ ARE tracked: they are the evidence behind the accuracy figures.
+eval_results/
+
+# Trained OCR model weights (large binaries, see app/ocr_models/weights/README.md)
+*.pth
+
 # IDE and OS files
 .vscode/
 .idea/
