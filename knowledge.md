@@ -55,3 +55,9 @@ All routers except `auth`/public endpoints are expected to sit behind the bearer
 - No automated test suite exists (backend or frontend). Verification is manual (see AGENTS.md).
 - OCR route depends on `torch`/`torchvision`/`easyocr` — first run downloads model weights and can be slow; this is expected, not a bug.
 - Frontend has no `.env` — the API base URL is derived from the browser's current hostname, so backend and frontend must be reachable on the same host/IP during a demo.
+
+## Recorded baseline (2026-09-28, branch `claude/nifty-mendel-pyxyq8`)
+
+- `npm run build` in `enersight-frontend/` — **passes**. Output warns the main JS chunk is >500kB (pre-existing, not a blocker).
+- `npm run lint` in `enersight-frontend/` — **fails with 24 pre-existing errors, 4 warnings**, mostly `no-unused-vars` in meter/reading forms and a few `react-hooks/set-state-in-effect` violations (setState called synchronously inside `useEffect`). These predate any Day 2 change — don't attribute new lint failures to a bounded change without first confirming they weren't already here.
+- Backend Python files pass `python -m py_compile` (syntax-only; full backend was not run end-to-end because it requires a live `DATABASE_URL`).
