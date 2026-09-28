@@ -536,7 +536,7 @@ function EnergyForecastCard({ monthlyConsumption }) {
   );
 }
 
-function StatCard({ title, value, unit, subtitle, icon: Icon, color = "emerald" }) {
+function StatCard({ title, value, subtitle, icon: Icon, color = "emerald" }) {
   const palette = {
     emerald: { bg: "border-emerald-100 bg-emerald-50", title: "text-emerald-700", value: "text-emerald-800", icon: "bg-emerald-700 text-white" },
     amber:   { bg: "border-amber-100 bg-amber-50",    title: "text-amber-700",   value: "text-amber-800",   icon: "bg-amber-500 text-white" },

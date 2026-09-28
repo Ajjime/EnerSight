@@ -345,8 +345,6 @@ function ReadingDetailsModal({ reading, meters, buildings, onClose }) {
 }
 
 const UploadOCR = () => {
-  const savedUser = getSavedUser();
-
   const [meters, setMeters] = useState([]);
   const [buildings, setBuildings] = useState([]);
   const [readings, setReadings] = useState([]);
@@ -368,14 +366,14 @@ const UploadOCR = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
-  const [ocrEngine, setOcrEngine] = useState("gemini_vision");
-  const [rawReadingValue, setRawReadingValue] = useState("");
+  const [_ocrEngine, setOcrEngine] = useState("gemini_vision");
+  const [_rawReadingValue, setRawReadingValue] = useState("");
   const [correctedReadingValue, setCorrectedReadingValue] = useState("");
   const [correctionApplied, setCorrectionApplied] = useState(false);
   const [needsReview, setNeedsReview] = useState(false);
-  const [reviewReason, setReviewReason] = useState("");
-  const [ocrRawText, setOcrRawText] = useState("");
-  const [ocrCandidates, setOcrCandidates] = useState([]);
+  const [_reviewReason, setReviewReason] = useState("");
+  const [_ocrRawText, setOcrRawText] = useState("");
+  const [_ocrCandidates, setOcrCandidates] = useState([]);
   const [previousReadingValue, setPreviousReadingValue] = useState(0);
   const [isFirstReading, setIsFirstReading] = useState(false);
   const [isFetchingPrevious, setIsFetchingPrevious] = useState(false);
@@ -416,16 +414,6 @@ const UploadOCR = () => {
 
   function getMeter(meterId) {
     return metersById.get(Number(meterId));
-  }
-
-  function getMeterLabel(meterId) {
-    const meter = getMeter(meterId);
-
-    if (!meter) {
-      return "Unknown meter";
-    }
-
-    return `${meter.serial_no} • ${getBuildingName(meter.building_id)}`;
   }
 
   async function fetchMeters() {

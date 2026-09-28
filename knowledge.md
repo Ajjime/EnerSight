@@ -59,5 +59,13 @@ All routers except `auth`/public endpoints are expected to sit behind the bearer
 ## Recorded baseline (2026-09-28, branch `claude/nifty-mendel-pyxyq8`)
 
 - `npm run build` in `enersight-frontend/` — **passes**. Output warns the main JS chunk is >500kB (pre-existing, not a blocker).
-- `npm run lint` in `enersight-frontend/` — **fails with 24 pre-existing errors, 4 warnings**, mostly `no-unused-vars` in meter/reading forms and a few `react-hooks/set-state-in-effect` violations (setState called synchronously inside `useEffect`). These predate any Day 2 change — don't attribute new lint failures to a bounded change without first confirming they weren't already here.
 - Backend Python files pass `python -m py_compile` (syntax-only; full backend was not run end-to-end because it requires a live `DATABASE_URL`).
+- `npm run lint` originally failed with 28 problems (24 errors, 4 warnings). 12 were genuinely dead code (unused imports/state/function in `Analytics.jsx`, `BuildingMap.jsx`, `Dashboard.jsx`, `UploadOCR.jsx`) and were removed as a bounded cleanup — no runtime behavior changed, verified by re-running lint and build after.
+
+### Remaining lint findings — pre-existing, left untouched on purpose
+
+- **`no-unused-vars` on 7 `icon: Icon` destructured props** (`Analytics.jsx:151`, `BuildingMap.jsx:298`, `Dashboard.jsx:539`, `ProfilePage.jsx:103,125`, `SettingsPage.jsx:149,182`) — **false positives**. Each `Icon` is genuinely rendered via `<Icon .../>` a few lines below; this project's `eslint.config.js` doesn't include `eslint-plugin-react`, so ESLint's core `no-unused-vars` isn't JSX-aware for this destructuring-rename pattern. Do not delete these — deleting would break the rendered icon.
+- **3× `react-hooks/set-state-in-effect`** (`LocationPickerModal.jsx:131`, `UploadOCR.jsx:534,539`) — setState called synchronously inside `useEffect`. Real refactors (move logic to an event handler / derive during render), not a delete-a-line fix; needs per-component behavioral review, so left for a dedicated task.
+- **1× `react-hooks/static-components`** (`Dashboard.jsx:515`) — `ForecastTooltip` is declared inside the parent's render body instead of module scope; moving it changes closures over local variables (`data`), needs care.
+- **1× `react-refresh/only-export-components`** (`ui.jsx:4`) — dev-experience only (breaks Fast Refresh for that file), not a runtime bug.
+- **4× `react-hooks/exhaustive-deps` warnings** (`Analytics.jsx`, `MetersPage.jsx`, `Reports.jsx` ×2) — adding the missing deps risks introducing re-render loops; needs testing per case, not a blind add.

@@ -486,8 +486,8 @@ function BuildingDetailsModal({ building, onClose }) {
 
 export default function BuildingMap() {
   const [buildings, setBuildings] = useState([]);
-  const [meters, setMeters] = useState([]);
-  const [readings, setReadings] = useState([]);
+  const [_meters, setMeters] = useState([]);
+  const [_readings, setReadings] = useState([]);
   const [statusFilter, setStatusFilter] = useState("All Status");
   const [buildingFilter, setBuildingFilter] = useState("All Buildings");
   const [query, setQuery] = useState("");

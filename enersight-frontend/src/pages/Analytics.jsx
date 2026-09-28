@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -148,7 +148,6 @@ function getRecommendation(row) {
 function StatCard({
   title,
   value,
-  unit,
   icon: Icon,
   tone = "dark",
   description,
