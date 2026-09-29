@@ -57,7 +57,7 @@ const AuthShell = ({ title, subtitle, children }) => {
             <div className="relative z-10 flex h-full flex-col justify-between gap-8">
               <div>
                 <div className="flex items-center gap-4">
-                  <div className="grid h-16 w-16 place-items-center overflow-hidden rounded-3xl bg-white shadow-xl shadow-emerald-950/30">
+                  <div className="animate-pop grid h-16 w-16 place-items-center overflow-hidden rounded-3xl bg-white shadow-xl shadow-emerald-950/30">
                     <img
                       src={logo}
                       alt={SYSTEM_NAME}
@@ -66,26 +66,38 @@ const AuthShell = ({ title, subtitle, children }) => {
                   </div>
 
                   <div className="min-w-0">
-                    <h1 className="text-3xl font-black leading-none">
+                    <h1 className="animate-fade-up text-3xl font-black leading-none">
                       {SYSTEM_NAME}
                     </h1>
-                    <p className="mt-2 max-w-[300px] text-[11px] font-black uppercase leading-5 tracking-[0.18em] text-lime-300">
+                    <p
+                      className="animate-fade-up mt-2 max-w-[300px] text-[11px] font-black uppercase leading-5 tracking-[0.18em] text-lime-300"
+                      style={{ animationDelay: "80ms" }}
+                    >
                       {SYSTEM_TAGLINE}
                     </p>
                   </div>
                 </div>
 
                 <div className="mt-8">
-                  <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-white/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-lime-300">
+                  <div
+                    className="animate-fade-up mb-4 inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-white/10 px-4 py-2 text-xs font-black uppercase tracking-[0.18em] text-lime-300"
+                    style={{ animationDelay: "140ms" }}
+                  >
                     <Leaf size={15} />
                     Smart Energy Command Center
                   </div>
 
-                  <h2 className="max-w-xl text-4xl font-black leading-[1.08] tracking-tight">
+                  <h2
+                    className="animate-fade-up max-w-xl text-4xl font-black leading-[1.08] tracking-tight"
+                    style={{ animationDelay: "200ms" }}
+                  >
                     Monitor energy with clarity.
                   </h2>
 
-                  <p className="mt-4 max-w-md text-sm font-bold leading-6 text-slate-300">
+                  <p
+                    className="animate-fade-up mt-4 max-w-md text-sm font-bold leading-6 text-slate-300"
+                    style={{ animationDelay: "260ms" }}
+                  >
                     A modern GIS and OCR-assisted platform for building energy
                     monitoring, reports, and role-based access.
                   </p>
@@ -94,13 +106,14 @@ const AuthShell = ({ title, subtitle, children }) => {
 
               <div className="space-y-3">
                 <div className="grid gap-2 sm:grid-cols-3">
-                  {featureBadges.map((feature) => {
+                  {featureBadges.map((feature, index) => {
                     const Icon = feature.icon;
 
                     return (
                       <div
                         key={feature.label}
-                        className="flex min-h-[68px] flex-col justify-center rounded-2xl border border-white/10 bg-white/[0.07] px-3 py-2.5"
+                        className="animate-fade-up flex min-h-[68px] flex-col justify-center rounded-2xl border border-white/10 bg-white/[0.07] px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:bg-white/[0.12]"
+                        style={{ animationDelay: `${320 + index * 60}ms` }}
                       >
                         <div className="mb-1.5 grid h-8 w-8 place-items-center rounded-xl bg-emerald-700 text-lime-300">
                           <Icon size={16} />
@@ -115,13 +128,14 @@ const AuthShell = ({ title, subtitle, children }) => {
                 </div>
 
                 <div className="grid gap-2 sm:grid-cols-3">
-                  {quickBadges.map((badge) => {
+                  {quickBadges.map((badge, index) => {
                     const Icon = badge.icon;
 
                     return (
                       <div
                         key={badge.label}
-                        className="flex min-h-[68px] flex-col justify-center rounded-2xl border border-white/10 bg-white/[0.07] px-3 py-2.5"
+                        className="animate-fade-up flex min-h-[68px] flex-col justify-center rounded-2xl border border-white/10 bg-white/[0.07] px-3 py-2.5 transition duration-200 hover:-translate-y-0.5 hover:bg-white/[0.12]"
+                        style={{ animationDelay: `${500 + index * 60}ms` }}
                       >
                         <div className="mb-1.5 grid h-8 w-8 place-items-center rounded-xl bg-emerald-700 text-white">
                           <Icon size={18} />
@@ -144,7 +158,7 @@ const AuthShell = ({ title, subtitle, children }) => {
           <section className="relative flex items-center overflow-y-auto p-5 md:p-6">
             <div className="pointer-events-none absolute right-8 top-8 hidden h-24 w-24 rounded-full bg-emerald-100/60 blur-2xl md:block" />
 
-            <div className="relative z-10 mx-auto w-full max-w-sm">
+            <div className="animate-fade-up relative z-10 mx-auto w-full max-w-sm">
               <div className="mb-3">
                 <div className="mb-3 flex items-center gap-3 lg:hidden">
                   <div className="grid h-12 w-12 place-items-center overflow-hidden rounded-2xl bg-white shadow-lg shadow-emerald-900/10">

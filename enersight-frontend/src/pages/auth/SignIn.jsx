@@ -102,7 +102,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="Enter username"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white focus:ring-4 focus:ring-emerald-600/10"
             />
           </div>
         </FormField>
@@ -119,7 +119,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter password"
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3 pl-14 pr-14 text-sm font-bold text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white focus:ring-4 focus:ring-emerald-600/10"
             />
 
             <button
@@ -147,7 +147,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot }) => {
         <button
           type="submit"
           disabled={isLoading}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white shadow-sm transition duration-200 hover:-translate-y-0.5 hover:bg-emerald-700 hover:shadow-lg hover:shadow-emerald-900/20 active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
         >
           {isLoading ? (
             <>
