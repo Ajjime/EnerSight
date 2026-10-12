@@ -69,6 +69,10 @@ We installed the `vercel-react-best-practices` skill from the `vercel-labs/agent
 
 *Figure 7. Skills folder and skills-lock.json recording the installed skill.*
 
+![](screenshots/7_vscode.png)
+
+*Figure 8. Project guidance files and skills in Visual Studio Code (Explorer on the left, knowledge.md open).*
+
 ## Conclusion
 
 Through the four processes of the Advance Seminar activity, our group practiced organizing a GitHub branch, preparing project guidance files, creating custom skills, and installing a skill from a provider. We learned that clear documentation and reusable guidelines help AI coding assistants follow a project's structure and rules, and that keeping each task to one small change on its own branch makes AI-assisted work easier to review and verify.
