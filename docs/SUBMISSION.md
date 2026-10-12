@@ -7,7 +7,7 @@ Syclops S. Lariosa
 
 ## Overview
 
-During our Advance Seminar activity, we worked on our EnerSight GitHub repository to practice using GitHub and AI-assisted development tools. EnerSight is a campus energy-monitoring system with a FastAPI backend (PostgreSQL), a React + Vite frontend, GIS map view, and OCR-based meter reading. We followed the four required processes: creating a working branch, writing instructions for AI coding assistants, developing custom skills, and installing a skill from an available provider. Through these activities, we learned how to prepare a project repository so AI tools can support our software development workflow.
+During our Advance Seminar activity, we worked on our EnerSight GitHub repository to practice using GitHub and AI-assisted development tools. EnerSight is a Building-Specific Energy Consumption Mapping and Optimization System using GIS, with a FastAPI + PostgreSQL backend, a React (Vite) + Tailwind + Leaflet frontend, and OCR-based meter reading. We followed the four required processes: creating a working branch, writing instructions for AI coding assistants, developing custom skills, and installing a skill from an available provider. Through these activities, we learned how to prepare a project repository so AI tools can support our software development workflow.
 
 Repository: <https://github.com/Ajjime/EnerSight>
 
@@ -15,8 +15,9 @@ Repository: <https://github.com/Ajjime/EnerSight>
 
 Our group created a new Git branch named `day2/login-page-redesign` in the EnerSight repository. We used it as the working branch for this activity so our changes stayed separate from `main`; `AGENTS.md` also forbids committing directly to `main`. The branch holds the guidance files and custom skills, plus one small, scoped feature the AI assistant implemented using them: the login page redesign with entrance animations and micro-interactions. Working on a branch kept each change small, reviewable, and easy to recover from.
 
-> **Figure 1.** EnerSight GitHub repository showing the `day2/login-page-redesign` branch.
-> ![Figure 1](screenshots/1_branch.png)
+![](screenshots/1_branch.png)
+
+*Figure 1. Commit history of the day2/login-page-redesign branch in the EnerSight repository.*
 
 ## Initialize/Create a knowledge.md/AGENTS.md/CLAUDE.md
 
@@ -28,12 +29,17 @@ Our group created three guidance files at the root of the EnerSight repository s
 
 Together these keep the AI tools within the existing project structure and avoid unnecessary modifications.
 
-> **Figure 2.** Project guidance files in the repository root.
-> **Figure 3.** `AGENTS.md` containing the project's working rules.
-> **Figure 4.** `knowledge.md` containing the architecture and technical information.
-> ![Figure 2](screenshots/2_files.png)
-> ![Figure 3](screenshots/3_agents.png)
-> ![Figure 4](screenshots/4_knowledge.png)
+![](screenshots/2_files.png)
+
+*Figure 2. Project guidance files in the repository root.*
+
+![](screenshots/3_agents.png)
+
+*Figure 3. AGENTS.md containing the project's working rules.*
+
+![](screenshots/4_knowledge.png)
+
+*Figure 4. knowledge.md containing the architecture and technical information (top section).*
 
 ## Create two (2) custom skills
 
@@ -47,16 +53,21 @@ Guides AI assistants when planning, implementing, or reviewing a change to a Rea
 
 Guides AI assistants when changing a FastAPI route, Pydantic schema, or SQLAlchemy model. It has the assistant trace router, `schemas.py`, `models.py`, and `database.py`, follow the `Depends(...)` auth convention, avoid SQLite assumptions (PostgreSQL only), edit one router at a time, and verify with `py_compile` and a real request to the touched endpoint.
 
-> **Figure 5.** `SKILL.md` files for the `enersight-frontend-page` and `enersight-backend-route` custom skills.
-> ![Figure 5a](screenshots/5a_skill_frontend.png)
-> ![Figure 5b](screenshots/5b_skill_backend.png)
+![](screenshots/5a_skill_frontend.png)
+
+*Figure 5. SKILL.md of the enersight-frontend-page custom skill.*
+
+![](screenshots/5b_skill_backend.png)
+
+*Figure 6. SKILL.md of the enersight-backend-route custom skill.*
 
 ## Download/Install skills from skills provider
 
 We installed the `vercel-react-best-practices` skill from the `vercel-labs/agent-skills` GitHub repository into `.agents/skills/vercel-react-best-practices/` (a `SKILL.md`, an `AGENTS.md`, and a `rules/` folder of individual React/performance rules). The install is recorded in `skills-lock.json` with its source and content hash so it can be reproduced. We use it as a reference for frontend work such as bundle size, re-renders, and data fetching, alongside our own skills and guidance files.
 
-> **Figure 6.** Installed skill and project instructions shown in Visual Studio Code.
-> ![Figure 6](screenshots/6_skills_tree.png)
+![](screenshots/6_skills_tree.png)
+
+*Figure 7. Skills folder and skills-lock.json recording the installed skill.*
 
 ## Conclusion
 
