@@ -8,7 +8,7 @@ Cyrel Jave M. Morales
 
 ## Overview
 
-During our Advance Seminar activity, we worked on our EnerSight GitHub repository to practice using GitHub and AI-assisted development tools. EnerSight is a Building-Specific Energy Consumption Mapping and Optimization System using GIS, with a FastAPI + PostgreSQL backend, a React (Vite) + Tailwind + Leaflet frontend, and OCR-based meter reading. We followed the four required processes: creating a working branch, writing instructions for AI coding assistants, developing custom skills, and installing a skill from an available provider. Through these activities, we learned how to prepare a project repository so AI tools can support our software development workflow.
+For this Advance Seminar requirement, we prepared the EnerSight repository so that AI coding assistants can work on it safely and consistently. EnerSight is a Building-Specific Energy Consumption Mapping and Optimization System using GIS, built with a FastAPI + PostgreSQL backend, a React (Vite) + Tailwind + Leaflet frontend, and OCR-based meter reading. Our work covered four tasks: opening a dedicated working branch, writing guidance files for AI tools, creating two custom skills for our own codebase, and installing a ready-made skill from an outside provider. Doing these gave us hands-on practice in setting up a project so that AI-assisted development stays organized and follows our rules.
 
 Repository: <https://github.com/Ajjime/EnerSight>
 
