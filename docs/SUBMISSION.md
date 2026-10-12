@@ -1,9 +1,10 @@
 # Advance Seminar Series Midterm Output
 
 **Members:**
-Cyrel Jave M. Morales  
+
 Klarence A. De Gracia  
-Syclops S. Lariosa
+Syclops S. Lariosa  
+Cyrel Jave M. Morales
 
 ## Overview
 
