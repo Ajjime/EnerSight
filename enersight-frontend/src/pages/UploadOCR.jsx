@@ -1,15 +1,18 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import ReactCrop from "react-image-crop";
 import {
   AlertTriangle,
   Building2,
   Camera,
   CheckCircle2,
+  Crop,
   Eye,
   FileImage,
   Gauge,
   ImagePlus,
   Info,
   Loader2,
+  Maximize2,
   RotateCcw,
   Save,
   ScanLine,
@@ -30,8 +33,17 @@ import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 import { formatNumber } from "../utils/format";
 import { getOcrScore } from "../utils/readingQuality";
+import { FULL_CROP, cropImageToFile, isCropped } from "../utils/imageCrop";
+import {
+  checkReadingPlausibility,
+  getLatestReading,
+  getUsualDailyUse,
+} from "../utils/readingPlausibility";
 const AUTO_REFRESH_MS = 30000;
 const PAGE_SIZE = 20;
+// A full-size phone photo takes up to a minute on a laptop CPU, and the backend
+// queues a scan for up to 90s behind another one. Past this, stop waiting.
+const OCR_TIMEOUT_MS = 180000;
 
 function getDefaultReadingDate() {
   const now = new Date();
@@ -45,6 +57,9 @@ const emptyForm = {
   reading_date: getDefaultReadingDate(),
   image_path: "No photo selected",
   ocr_accuracy: 0,
+  // The digits OCR proposed for this photo, kept even if the person changes the
+  // value, so a saved correction records what the scan got wrong.
+  ocr_reading: "",
 };
 
 function normalizeBuilding(building) {
@@ -78,8 +93,18 @@ function normalizeReading(reading) {
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "No image attached",
     ocr_accuracy: getOcrScore(reading.ocr_accuracy),
+    ocr_reading: reading.ocr_reading || "",
     is_verified: Boolean(reading.is_verified),
   };
+}
+
+/** True when the saved value is not what OCR read, i.e. a person corrected it. */
+function isCorrectedFromOcr(ocrReading, value) {
+  if (!ocrReading || String(value ?? "").trim() === "") {
+    return false;
+  }
+
+  return Number(ocrReading) !== Number(value);
 }
 
 function formatDateTime(value) {
@@ -311,6 +336,17 @@ function ReadingDetailsModal({ reading, meters, buildings, onClose }) {
                 <p className="break-words text-xs font-normal text-slate-500">
                   {reading.image_path}
                 </p>
+                {reading.ocr_reading && (
+                  <p className="text-sm font-normal text-slate-600">
+                    OCR read{" "}
+                    <span className="font-semibold text-slate-950">
+                      {reading.ocr_reading}
+                    </span>
+                    {isCorrectedFromOcr(reading.ocr_reading, reading.reading_value)
+                      ? `; corrected by hand to ${formatNumber(reading.reading_value)}.`
+                      : "; saved as read."}
+                  </p>
+                )}
               </div>
             ) : (
               <p className="mt-2 break-words text-sm font-normal text-slate-500">
@@ -360,6 +396,10 @@ const UploadOCR = () => {
   const [form, setForm] = useState(emptyForm);
   const [selectedPhotoFile, setSelectedPhotoFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState("");
+  // The box the user draws around the meter display, as react-image-crop percents.
+  const [crop, setCrop] = useState(FULL_CROP);
+  // The previewed <img>, which the crop is cut from at its full resolution.
+  const photoRef = useRef(null);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -372,6 +412,10 @@ const UploadOCR = () => {
   });
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isRunningOcr, setIsRunningOcr] = useState(false);
+  const [ocrElapsedSeconds, setOcrElapsedSeconds] = useState(0);
+  // The in-flight scan's AbortController. A ref, not state, so a second photo
+  // picked in the same render still sees that a scan is running.
+  const ocrAbortRef = useRef(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
@@ -408,6 +452,9 @@ const UploadOCR = () => {
 
     return () => window.clearTimeout(timeoutId);
   }, [toast.message]);
+
+  // Leaving the page drops the pending scan instead of updating an unmounted form.
+  useEffect(() => () => ocrAbortRef.current?.abort(), []);
 
   const metersById = useMemo(
     () => new Map(meters.map((m) => [Number(m.meter_id), m])),
@@ -619,18 +666,57 @@ const UploadOCR = () => {
       )
     : null;
 
+  // The present reading checked against the meter's own history. Shown as the
+  // value changes, so it catches an OCR misread and a typo the same way.
+  const usualDailyUse = useMemo(
+    () => getUsualDailyUse(readings, form.meter_id),
+    [readings, form.meter_id]
+  );
+
+  const latestMeterReading = useMemo(
+    () => getLatestReading(readings, form.meter_id),
+    [readings, form.meter_id]
+  );
+
+  const plausibilityIssues = useMemo(
+    () =>
+      form.meter_id
+        ? checkReadingPlausibility({
+            value: form.reading_value,
+            previousValue: previousReadingValue,
+            // A first reading's "previous" is typed in, with no date to measure from.
+            previousDate: isFirstReading ? null : latestMeterReading?.reading_date,
+            readingDate: form.reading_date,
+            usualDailyUse,
+            serialNo: selectedMeter?.serial_no,
+          })
+        : [],
+    [
+      form.meter_id,
+      form.reading_value,
+      form.reading_date,
+      previousReadingValue,
+      isFirstReading,
+      latestMeterReading,
+      usualDailyUse,
+      selectedMeter,
+    ]
+  );
+
+  const correctedFromOcr = isCorrectedFromOcr(form.ocr_reading, form.reading_value);
+
   const ocrStatusLabel = getOcrStatusLabel({
     selectedPhotoFile,
     isRunningOcr,
     readingValue: form.reading_value,
-    needsReview,
+    needsReview: needsReview || plausibilityIssues.length > 0,
   });
 
   const ocrStatusStyle = getOcrStatusStyle({
     selectedPhotoFile,
     isRunningOcr,
     readingValue: form.reading_value,
-    needsReview,
+    needsReview: needsReview || plausibilityIssues.length > 0,
   });
 
   function clearOcrResult() {
@@ -666,6 +752,12 @@ const UploadOCR = () => {
       return;
     }
 
+    if (ocrAbortRef.current) {
+      event.target.value = "";
+      showToast("Wait for the current scan to finish first.", "error");
+      return;
+    }
+
     resetSelectedPhoto();
 
     const newPreviewUrl = URL.createObjectURL(file);
@@ -673,27 +765,26 @@ const UploadOCR = () => {
     setSelectedPhotoFile(file);
     setSelectedFileName(file.name);
     setPreviewUrl(newPreviewUrl);
+    setCrop(FULL_CROP);
 
     setForm((current) => ({
       ...current,
       image_path: file.name,
       reading_value: "",
       ocr_accuracy: 0,
+      ocr_reading: "",
       is_verified: false,
     }));
 
     event.target.value = "";
 
-    // Auto-run OCR as soon as a photo is selected.
-    if (form.meter_id) {
-      runEasyOcr(file);
-    } else {
-      showToast("Select a meter, then OCR will run automatically.", "error");
-    }
+    // No auto-scan: the user frames the display first. Scanning the moment a photo
+    // was picked sent the full photo, which took up to a minute and read worse
+    // than a crop of the display.
   }
 
-  async function runEasyOcr(fileOverride) {
-    const photoFile = fileOverride || selectedPhotoFile;
+  async function runEasyOcr() {
+    const photoFile = selectedPhotoFile;
 
     if (!form.meter_id) {
       showToast("Please select a meter before running OCR.", "error");
@@ -705,16 +796,43 @@ const UploadOCR = () => {
       return;
     }
 
+    if (ocrAbortRef.current) {
+      return;
+    }
+
+    const controller = new AbortController();
+    ocrAbortRef.current = controller;
+    const timeoutId = window.setTimeout(() => controller.abort(), OCR_TIMEOUT_MS);
+    const startedAt = Date.now();
+    const tickId = window.setInterval(() => {
+      setOcrElapsedSeconds(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    setOcrElapsedSeconds(0);
     setIsRunningOcr(true);
     clearOcrResult();
 
     try {
+      // The framed part of the photo, scaled down if it is a full-size photo. Falls
+      // back to the original file if the preview never loaded.
+      let uploadFile = photoFile;
+      const image = photoRef.current;
+
+      if (image?.naturalWidth) {
+        try {
+          uploadFile = await cropImageToFile(image, crop, photoFile.name);
+        } catch (cropError) {
+          console.error("Crop failed, sending the full photo:", cropError);
+        }
+      }
+
       const formData = new FormData();
-      formData.append("file", photoFile);
+      formData.append("file", uploadFile);
 
       const response = await apiFetch(`${API_BASE_URL}/ocr/meter-photo`, {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
 
       const data = await response.json();
@@ -748,6 +866,7 @@ const UploadOCR = () => {
         ...current,
         reading_value: detectedReading,
         ocr_accuracy: detectedAccuracy,
+        ocr_reading: data.success ? detectedReading : "",
         // The servable path the backend saved the photo to, so this reading can be
         // traced back to its evidence. Falls back to the local filename only for
         // display when the backend returned nothing.
@@ -782,21 +901,49 @@ const UploadOCR = () => {
         );
       }
     } catch (error) {
+      if (error.name === "AbortError") {
+        // Aborted by the timeout, or by leaving the page (then nobody sees this).
+        showToast(
+          "OCR took too long. Frame just the display with the crop box and try again, or enter the reading manually.",
+          "error"
+        );
+        return;
+      }
+
       console.error("OCR request error:", error);
       showToast(
         "Cannot connect to OCR endpoint. Please make sure FastAPI is running.",
         "error"
       );
     } finally {
+      window.clearTimeout(timeoutId);
+      window.clearInterval(tickId);
+      ocrAbortRef.current = null;
       setIsRunningOcr(false);
     }
   }
 
-  async function saveReading() {
+  async function saveReading({ confirmed = false } = {}) {
     const validationError = getReadingFormError(form, previousReadingValue);
 
     if (validationError) {
       showToast(validationError, "error");
+      return;
+    }
+
+    // Unusual but possible (a real jump in use, a coincidental serial match), so
+    // the person decides, after being told what looks off.
+    const warnings = plausibilityIssues.filter((issue) => !issue.blocking);
+
+    if (warnings.length > 0 && !confirmed) {
+      setConfirmation({
+        type: "saveUnusualReading",
+        title: "Save an unusual reading?",
+        message: warnings.map((issue) => issue.message).join(" "),
+        note: "Compare the number with the meter photo first. It is saved as pending review either way.",
+        confirmText: "Save Anyway",
+        variant: "warning",
+      });
       return;
     }
 
@@ -959,6 +1106,12 @@ const UploadOCR = () => {
   }
 
   function handleConfirmAction() {
+    if (confirmation?.type === "saveUnusualReading") {
+      setConfirmation(null);
+      saveReading({ confirmed: true });
+      return;
+    }
+
     if (confirmation?.type === "deleteReading") {
       confirmDeleteReading();
       return;
@@ -1014,7 +1167,7 @@ const UploadOCR = () => {
             </div>
           </div>
 
-          <label className="flex w-full cursor-pointer items-center justify-center gap-3 rounded-2xl bg-white py-4 text-sm font-semibold text-emerald-700 shadow-sm active:scale-[0.98] transition-transform duration-150">
+          <label className={`flex w-full cursor-pointer items-center justify-center gap-3 rounded-2xl bg-white py-4 text-sm font-semibold text-emerald-700 shadow-sm active:scale-[0.98] transition-transform duration-150 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
             <Camera size={22} />
             Open Camera
             <input
@@ -1022,6 +1175,7 @@ const UploadOCR = () => {
               accept="image/*"
               capture="environment"
               className="hidden"
+              disabled={isRunningOcr}
               onChange={handleFileChange}
             />
           </label>
@@ -1030,7 +1184,7 @@ const UploadOCR = () => {
             <div className="mt-3 flex items-center gap-2 rounded-2xl bg-white/15 px-4 py-2.5">
               <CheckCircle2 size={16} className="text-lime-300" />
               <p className="text-xs font-medium text-white">
-                Photo selected — scroll down to run OCR.
+                Photo selected. Scroll down to frame the display and run OCR.
               </p>
             </div>
           )}
@@ -1113,7 +1267,7 @@ const UploadOCR = () => {
                 Meter Photo Capture
               </h2>
               <p className="mt-1 text-sm font-normal text-slate-500">
-                Upload a meter photo and run OCR to detect the reading.
+                Upload a meter photo, frame the display, then run OCR.
               </p>
             </div>
 
@@ -1124,14 +1278,28 @@ const UploadOCR = () => {
 
           <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="relative flex min-h-[320px] items-center justify-center overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white">
+              {/* p-4: the crop handles sit half outside the photo's edge, and without
+                  room around it overflow-hidden clipped them on tall photos, so the
+                  corners could not be grabbed. */}
+              <div className="relative flex min-h-[320px] items-center justify-center overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white p-4">
                 {previewUrl ? (
-                  <img
-                    key={previewUrl}
-                    src={previewUrl}
-                    alt="Selected meter"
-                    className="animate-image-in max-h-[360px] w-full object-contain"
-                  />
+                  <ReactCrop
+                    crop={crop}
+                    onChange={(_pixelCrop, percentCrop) => setCrop(percentCrop)}
+                    keepSelection
+                    minWidth={40}
+                    minHeight={30}
+                    disabled={isRunningOcr}
+                    className="max-h-[340px]"
+                  >
+                    <img
+                      ref={photoRef}
+                      key={previewUrl}
+                      src={previewUrl}
+                      alt="Selected meter. Drag the box to frame the display."
+                      className="animate-image-in max-h-[340px] w-auto"
+                    />
+                  </ReactCrop>
                 ) : (
                   <div className="animate-fade-in p-8 text-center">
                     <FileImage className="mx-auto text-slate-300" size={58} />
@@ -1151,27 +1319,56 @@ const UploadOCR = () => {
                     <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-gradient-to-t from-emerald-950/70 to-transparent p-4">
                       <Loader2 size={16} className="animate-spin text-lime-300" />
                       <span className="text-xs font-semibold uppercase tracking-[0.16em] text-white">
-                        Scanning meter...
+                        Scanning meter... {ocrElapsedSeconds}s
                       </span>
                     </div>
                   </div>
                 )}
               </div>
 
+              {previewUrl && (
+                <div className="mt-3 flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+                  <Crop size={18} className="mt-0.5 shrink-0 text-emerald-700" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-emerald-900">
+                      Frame the meter display
+                    </p>
+                    <p className="mt-0.5 text-xs font-normal leading-5 text-emerald-800">
+                      Drag the corners so the box holds the whole display with a
+                      little of the meter around it. Leave out the serial number and
+                      barcode. A loose box reads better than a tight one, and scans
+                      much faster than the whole photo.
+                    </p>
+                    {isCropped(crop) && (
+                      <button
+                        type="button"
+                        onClick={() => setCrop(FULL_CROP)}
+                        disabled={isRunningOcr}
+                        className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
+                      >
+                        <Maximize2 size={13} />
+                        Use whole photo
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className={`mt-4 grid gap-3 ${isMobileDevice ? "sm:grid-cols-2" : ""}`}>
-                <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                <label className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
                   <ImagePlus size={18} />
                   Upload Photo
                   <input
                     type="file"
                     accept="image/*"
                     className="hidden"
+                    disabled={isRunningOcr}
                     onChange={handleFileChange}
                   />
                 </label>
 
                 {isMobileDevice && (
-                  <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                  <label className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
                     <Camera size={18} />
                     Take Photo
                     <input
@@ -1179,6 +1376,7 @@ const UploadOCR = () => {
                       accept="image/*"
                       capture="environment"
                       className="hidden"
+                      disabled={isRunningOcr}
                       onChange={handleFileChange}
                     />
                   </label>
@@ -1188,7 +1386,9 @@ const UploadOCR = () => {
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={runEasyOcr}
+                  // Not onClick={runEasyOcr}: React would pass the click event in
+                  // as an argument.
+                  onClick={() => runEasyOcr()}
                   disabled={isRunningOcr || !selectedPhotoFile}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -1203,7 +1403,7 @@ const UploadOCR = () => {
                 <button
                   type="button"
                   onClick={resetSelectedPhoto}
-                  disabled={!selectedPhotoFile}
+                  disabled={isRunningOcr || !selectedPhotoFile}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <RotateCcw size={18} />
@@ -1278,7 +1478,14 @@ const UploadOCR = () => {
                 </div>
               )}
 
-              <Field label="Present Reading">
+              <Field
+                label="Present Reading"
+                helper={
+                  correctedFromOcr
+                    ? `OCR read ${form.ocr_reading}. Your correction is saved with the photo, which is what retraining the OCR needs.`
+                    : undefined
+                }
+              >
                 <input
                   type="number"
                   step="any"
@@ -1287,9 +1494,29 @@ const UploadOCR = () => {
                     setForm({ ...form, reading_value: event.target.value })
                   }
                   placeholder="Example: 82353"
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
+                  aria-invalid={plausibilityIssues.length > 0}
+                  className={`w-full rounded-2xl border bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white ${
+                    plausibilityIssues.length > 0 ? "border-amber-300" : "border-slate-200"
+                  }`}
                 />
               </Field>
+
+              {plausibilityIssues.length > 0 && (
+                <div
+                  role="status"
+                  className="animate-fade-up rounded-2xl border border-amber-100 bg-amber-50 p-4"
+                >
+                  <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
+                    <AlertTriangle size={14} />
+                    Check this reading
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-sm font-normal leading-5 text-amber-800">
+                    {plausibilityIssues.map((issue) => (
+                      <li key={issue.code}>{issue.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <Field label="Reading Date">
                 <input
@@ -1332,7 +1559,7 @@ const UploadOCR = () => {
 
               <button
                 type="button"
-                onClick={saveReading}
+                onClick={() => saveReading()}
                 disabled={isSaving || meters.length === 0}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -1795,6 +2022,9 @@ function buildReadingPayload(form, previousReading = 0) {
     // null rather than 0 when nothing was scored. A typed-in reading has no OCR
     // accuracy, and a stored 0 was read back as "0% accurate" by every page.
     ocr_accuracy: getOcrScore(form.ocr_accuracy),
+    // What OCR read, next to the value the person saved. Where the two differ the
+    // photo records a misread, which is what the trained models need to learn from.
+    ocr_reading: /^[0-9]+$/.test(form.ocr_reading || "") ? form.ocr_reading : null,
     // user_id and is_verified are deliberately not sent. The backend takes the
     // author from the token, and verification is a separate Admin/Manager action.
   };
