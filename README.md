@@ -14,7 +14,7 @@ intensity is out of line.
 | Layer | Technology |
 |---|---|
 | Backend | FastAPI, SQLAlchemy, PostgreSQL |
-| OCR | EasyOCR plus three trained DTRB models (PyTorch), reconciled by a weighted ensemble |
+| OCR | EasyOCR plus three trained DTRB models (PyTorch); EasyOCR's reading stands unless the trained models outvote it, and every override goes to review |
 | Frontend | React 19, Vite, Tailwind CSS |
 | Mapping | Leaflet with OpenStreetMap tiles |
 | Charts | Recharts |
@@ -66,11 +66,22 @@ A fresh database has no accounts, and sign-up cannot create an Admin. Use the se
 script:
 
 ```bash
-python seed_demo_data.py --demo-buildings --months 12
+python seed_demo_data.py --demo
 ```
 
-That creates an `admin` account, five demo buildings with meters, and twelve months
-of monthly readings. Change the admin password after your first sign-in.
+That creates an `admin` account, demo Manager and Staff accounts plus one pending
+sign-up, seven demo buildings with meters and appliance lists, and eighteen months of
+monthly readings up to the current month. It deletes any existing readings first. The
+buildings grade 2 Critical, 2 High, 2 Normal and 1 No Data (a new building whose meter
+has not been read yet). Their appliance lists produce every verdict in Analytics'
+measured-vs-estimated table. Change the admin password after your first sign-in.
+
+To give your own buildings an appliance list sized to their floor area, without
+touching readings:
+
+```bash
+python seed_demo_data.py --appliances    # skips buildings that already have one
+```
 
 If you already have your own buildings and meters and just want reading history:
 
@@ -152,6 +163,7 @@ users                         buildings
             ├─ reading_date        ← backdatable, so history can be entered
             ├─ image_path          ← served from /uploads/meter_photos/
             ├─ ocr_accuracy        ← NULL when typed by hand
+            ├─ ocr_reading         ← what OCR read; differs from reading_value when corrected
             └─ is_verified         ← set only via PUT /readings/{id}/verify
 
 access_log                    settings
@@ -221,10 +233,20 @@ cd enersight-backend
 python evaluate_ocr.py --images eval_data/images --labels eval_data/labels.csv
 ```
 
-Reports exact-match and character accuracy for the shipped ensemble **and for each
-of its four engines separately**, plus a confidence-calibration table and a
-digit-confusion tally. See [eval_data/README.md](enersight-backend/eval_data/README.md)
+Reports exact-match, value-correct and character accuracy for the shipped ensemble
+**and for each of its four engines separately**, plus a confidence-calibration table
+and a digit-confusion tally. See [eval_data/README.md](enersight-backend/eval_data/README.md)
 for how to build a representative set.
+
+The set grows as the system is used. Every reading saved through the upload page
+keeps its photo, what OCR read and the value the person saved, and
+
+```bash
+python export_ocr_dataset.py            # add --verified-only for checked readings
+```
+
+writes them out as `ocr_dataset/images/` plus a `labels.csv` in the same format, for
+scoring or for retraining the trained models on photos of the campus meters.
 
 ---
 
