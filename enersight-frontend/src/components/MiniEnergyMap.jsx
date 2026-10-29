@@ -90,6 +90,9 @@ export default function MiniEnergyMap({
   buildings = [],
   height = 315,
   onEmptyAction,
+  // Called with the building row when its pin is clicked. Without it the pins
+  // only show their tooltip.
+  onSelectBuilding,
 }) {
   const mapped = useMemo(
     () =>
@@ -163,6 +166,9 @@ export default function MiniEnergyMap({
             key={building.building_id}
             position={[Number(building.latitude), Number(building.longitude)]}
             icon={getMarkerIcon(building.status)}
+            eventHandlers={
+              onSelectBuilding ? { click: () => onSelectBuilding(building) } : undefined
+            }
           >
             <Tooltip
               direction="top"

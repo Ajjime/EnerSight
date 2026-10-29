@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   CheckCircle2,
@@ -34,7 +34,16 @@ import {
   applianceKwhMonth,
   formatPeso,
 } from "../utils/currency";
+import {
+  EMPTY_APPLIANCE_FORM,
+  isApplianceDraftStarted,
+  validateApplianceForm,
+} from "../utils/appliances";
 const AUTO_REFRESH_MS = 60000;
+
+// Loaded on first open: the profile brings Recharts and Leaflet, which this page
+// otherwise never needs.
+const BuildingProfile = lazy(() => import("../components/BuildingProfile"));
 
 // Common appliances with typical wattage — picking one pre-fills the form.
 const appliancePresets = [
@@ -63,15 +72,6 @@ const applianceCategories = [
   "Others",
 ];
 
-const emptyApplianceForm = {
-  name: "",
-  category: "Cooling",
-  wattage: "",
-  quantity: "1",
-  hours_per_day: "",
-  days_per_month: "30",
-};
-
 const emptyForm = {
   name: "",
   address: "",
@@ -82,45 +82,57 @@ const emptyForm = {
   status: "Active",
 };
 
+// Kept in step with DEMO_BUILDINGS in enersight-backend/seed_demo_data.py, so
+// loading samples here and seeding from the backend cannot produce two competing
+// sets of campus buildings. Generic names on the DNSC Panabo campus - not a
+// roster of real facilities.
 const sampleBuildings = [
   {
-    name: "Admin Building",
-    latitude: 7.3089,
-    longitude: 125.6841,
-    floor_area: 1200,
+    name: "Administration Building",
+    latitude: 7.31389,
+    longitude: 125.67127,
+    floor_area: 2400,
     building_type: "Office",
     status: "Active",
   },
   {
-    name: "Engineering Building",
-    latitude: 7.3093,
-    longitude: 125.6848,
-    floor_area: 1850,
+    name: "Institute of Computing",
+    latitude: 7.31425,
+    longitude: 125.67185,
+    floor_area: 1800,
     building_type: "Laboratory",
     status: "Active",
   },
   {
-    name: "Library",
-    latitude: 7.3084,
-    longitude: 125.6835,
-    floor_area: 980,
+    name: "Learning Resource Center",
+    latitude: 7.31352,
+    longitude: 125.67068,
+    floor_area: 1600,
     building_type: "Support",
     status: "Active",
   },
   {
-    name: "Warehouse",
-    latitude: 7.3101,
-    longitude: 125.6853,
-    floor_area: 2100,
-    building_type: "Warehouse",
+    name: "Science Laboratory Building",
+    latitude: 7.31461,
+    longitude: 125.67102,
+    floor_area: 1250,
+    building_type: "Office",
     status: "Active",
   },
   {
-    name: "Laboratory Building",
-    latitude: 7.3098,
-    longitude: 125.6829,
-    floor_area: 1450,
-    building_type: "Laboratory",
+    name: "Student Center",
+    latitude: 7.31318,
+    longitude: 125.67214,
+    floor_area: 1400,
+    building_type: "Support",
+    status: "Active",
+  },
+  {
+    name: "Maintenance and Storage",
+    latitude: 7.31278,
+    longitude: 125.67035,
+    floor_area: 900,
+    building_type: "Warehouse",
     status: "Active",
   },
 ];
@@ -273,16 +285,25 @@ function BuildingModal({
   onSave,
   isSaving,
   onOpenLocationPicker,
+  rate,
+  newAppliances,
+  setNewAppliances,
+  applianceDraft,
+  setApplianceDraft,
 }) {
   if (!modal) {
     return null;
   }
 
-  const isView = modal.mode === "view";
+  const isAdd = modal.mode === "add";
 
   return (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/60 p-4">
-      <div className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl">
+      <div
+        className={`max-h-[92vh] w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-xl ${
+          isAdd ? "max-w-4xl" : "max-w-3xl"
+        }`}
+      >
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white p-6">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
@@ -290,11 +311,7 @@ function BuildingModal({
             </p>
 
             <h2 className="mt-2 text-2xl font-bold text-slate-950">
-              {modal.mode === "add"
-                ? "Add Building"
-                : modal.mode === "edit"
-                ? "Edit Building"
-                : "Building Details"}
+              {isAdd ? "Add Building" : "Edit Building"}
             </h2>
 
             <p className="mt-1 text-sm font-normal text-slate-500">
@@ -315,7 +332,6 @@ function BuildingModal({
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="Building Name">
               <input
-                disabled={isView}
                 value={form.name}
                 onChange={(event) =>
                   setForm({ ...form, name: event.target.value })
@@ -327,7 +343,6 @@ function BuildingModal({
 
             <Field label="Building Type">
               <select
-                disabled={isView}
                 value={form.building_type}
                 onChange={(event) =>
                   setForm({ ...form, building_type: event.target.value })
@@ -345,11 +360,7 @@ function BuildingModal({
             <div className="md:col-span-2">
               <Field
                 label="Building Location"
-                helper={
-                  isView
-                    ? "Saved GIS coordinate of the building."
-                    : "Click the map to capture latitude and longitude."
-                }
+                helper="Click the map to capture latitude and longitude."
               >
                 <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -366,23 +377,19 @@ function BuildingModal({
                         </p>
 
                         <p className="mt-1 text-xs font-normal leading-5 text-emerald-700">
-                          {isView
-                            ? "Coordinates are shown below."
-                            : "Use map picker instead of manual typing."}
+                          Use map picker instead of manual typing.
                         </p>
                       </div>
                     </div>
 
-                    {!isView && (
-                      <button
-                        type="button"
-                        onClick={onOpenLocationPicker}
-                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
-                      >
-                        <MapPinned size={18} />
-                        Select Location on Map
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={onOpenLocationPicker}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+                    >
+                      <MapPinned size={18} />
+                      Select Location on Map
+                    </button>
                   </div>
 
                   <div className="mt-4 space-y-3">
@@ -405,7 +412,6 @@ function BuildingModal({
 
             <Field label="Floor Area" helper="Used for EUI calculation.">
               <input
-                disabled={isView}
                 type="number"
                 step="any"
                 value={form.floor_area}
@@ -419,7 +425,6 @@ function BuildingModal({
 
             <Field label="Operational Status">
               <select
-                disabled={isView}
                 value={form.status}
                 onChange={(event) =>
                   setForm({ ...form, status: event.target.value })
@@ -433,6 +438,16 @@ function BuildingModal({
                 ))}
               </select>
             </Field>
+
+            {isAdd && (
+              <NewBuildingAppliances
+                appliances={newAppliances}
+                setAppliances={setNewAppliances}
+                draft={applianceDraft}
+                setDraft={setApplianceDraft}
+                rate={rate}
+              />
+            )}
           </div>
         </div>
 
@@ -442,19 +457,366 @@ function BuildingModal({
             onClick={onClose}
             className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
           >
-            {isView ? "Close" : "Cancel"}
+            Cancel
           </button>
 
-          {!isView && (
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={onSave}
+            className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isSaving
+              ? "Saving..."
+              : isAdd && newAppliances.length > 0
+              ? `Save Building + ${newAppliances.length} Appliance${
+                  newAppliances.length === 1 ? "" : "s"
+                }`
+              : "Save Building"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The appliance inputs: quick pick, the six fields and a live estimate. Shared by
+// the appliance manager (plug icon) and the appliance list inside Add Building.
+function ApplianceFields({ form, setForm, rate }) {
+  function applyPreset(label) {
+    const preset = appliancePresets.find((item) => item.label === label);
+
+    if (!preset) {
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      name: preset.label,
+      category: preset.category,
+      wattage: String(preset.wattage),
+      hours_per_day: String(preset.hours_per_day),
+      days_per_month: String(preset.days_per_month),
+    }));
+  }
+
+  const estimateKwh = applianceKwhMonth(form);
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      <Field label="Quick Pick" helper="Auto-fills name, category, wattage, and typical usage. You can still edit any field.">
+        <select
+          value=""
+          onChange={(event) => applyPreset(event.target.value)}
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600"
+        >
+          <option value="">Select common appliance...</option>
+          {appliancePresets.map((preset) => (
+            <option key={preset.label} value={preset.label}>
+              {preset.label} ({preset.wattage} W)
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Appliance Name">
+        <input
+          value={form.name}
+          onChange={(event) =>
+            setForm({ ...form, name: event.target.value })
+          }
+          placeholder="Example: Split-type Aircon"
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
+        />
+      </Field>
+
+      <Field label="Category">
+        <select
+          value={form.category}
+          onChange={(event) =>
+            setForm({ ...form, category: event.target.value })
+          }
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600"
+        >
+          {applianceCategories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Wattage (W)" helper="Rated power on the label.">
+        <input
+          type="number"
+          step="any"
+          min="0"
+          value={form.wattage}
+          onChange={(event) =>
+            setForm({ ...form, wattage: event.target.value })
+          }
+          placeholder="Example: 1120"
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
+        />
+      </Field>
+
+      <Field label="Quantity">
+        <input
+          type="number"
+          min="1"
+          value={form.quantity}
+          onChange={(event) =>
+            setForm({ ...form, quantity: event.target.value })
+          }
+          placeholder="1"
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
+        />
+      </Field>
+
+      <Field label="Hours / Day">
+        <input
+          type="number"
+          step="any"
+          min="0"
+          max="24"
+          value={form.hours_per_day}
+          onChange={(event) =>
+            setForm({ ...form, hours_per_day: event.target.value })
+          }
+          placeholder="Example: 8"
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
+        />
+      </Field>
+
+      <Field label="Days / Month">
+        <input
+          type="number"
+          min="1"
+          max="31"
+          value={form.days_per_month}
+          onChange={(event) =>
+            setForm({ ...form, days_per_month: event.target.value })
+          }
+          placeholder="30"
+          className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
+        />
+      </Field>
+
+      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 xl:col-span-2">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+          This appliance ≈
+        </p>
+        <p className="mt-1 text-sm font-semibold text-emerald-800">
+          {formatNumber(Math.round(estimateKwh))}{" "}
+          kWh ·{" "}
+          {formatPeso(estimateKwh * rate)}{" "}
+          / month
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Add Building only. Appliances listed here stay in the form until Save Building,
+// which creates the building and then each appliance under it, so a new building
+// and its inventory take one step instead of a save followed by the plug icon.
+function NewBuildingAppliances({
+  appliances,
+  setAppliances,
+  draft,
+  setDraft,
+  rate,
+}) {
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [draftError, setDraftError] = useState("");
+
+  const totalKwh = appliances.reduce(
+    (sum, appliance) => sum + applianceKwhMonth(appliance),
+    0
+  );
+
+  function updateDraft(next) {
+    setDraftError("");
+    setDraft(next);
+  }
+
+  function clearDraft() {
+    setDraft(EMPTY_APPLIANCE_FORM);
+    setEditingIndex(null);
+    setDraftError("");
+  }
+
+  function addToList() {
+    const { payload, error } = validateApplianceForm(draft);
+
+    if (error) {
+      setDraftError(error);
+      return;
+    }
+
+    setAppliances((current) =>
+      editingIndex === null
+        ? [...current, payload]
+        : current.map((item, index) => (index === editingIndex ? payload : item))
+    );
+    clearDraft();
+  }
+
+  function editItem(index) {
+    const item = appliances[index];
+
+    setEditingIndex(index);
+    setDraftError("");
+    setDraft({
+      name: item.name,
+      category: item.category,
+      wattage: String(item.wattage),
+      quantity: String(item.quantity),
+      hours_per_day: String(item.hours_per_day),
+      days_per_month: String(item.days_per_month),
+    });
+  }
+
+  function removeItem(index) {
+    setAppliances((current) =>
+      current.filter((_, itemIndex) => itemIndex !== index)
+    );
+
+    if (editingIndex === index) {
+      clearDraft();
+    } else if (editingIndex !== null && index < editingIndex) {
+      setEditingIndex(editingIndex - 1);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white md:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-4">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-lime-50 text-lime-700">
+            <Plug size={18} />
+          </div>
+
+          <div>
+            <p className="text-sm font-semibold text-slate-950">
+              Appliances{" "}
+              <span className="font-normal text-slate-400">(optional)</span>
+            </p>
+            <p className="mt-0.5 text-xs font-normal leading-5 text-slate-500">
+              Add them now and they are saved with the building. You can still
+              change them later with the plug icon.
+            </p>
+          </div>
+        </div>
+
+        {appliances.length > 0 && (
+          <div className="text-right text-xs font-normal text-slate-500">
+            <p>
+              <span className="font-semibold text-slate-950">
+                {appliances.length}
+              </span>{" "}
+              appliance{appliances.length === 1 ? "" : "s"}
+            </p>
+            <p>
+              <span className="font-semibold text-emerald-700">
+                {formatNumber(Math.round(totalKwh))} kWh
+              </span>{" "}
+              · {formatPeso(totalKwh * rate)} / month
+            </p>
+          </div>
+        )}
+      </div>
+
+      {appliances.length > 0 && (
+        <div className="overflow-x-auto border-b border-slate-100">
+          <div className="min-w-[600px] divide-y divide-slate-100">
+            {appliances.map((appliance, index) => {
+              const kwh = applianceKwhMonth(appliance);
+              const isEditing = editingIndex === index;
+
+              return (
+                <div
+                  key={`${appliance.name}-${index}`}
+                  className={`grid grid-cols-[1.6fr_1fr_1fr_0.9fr_0.9fr_84px] items-center gap-3 px-4 py-3 text-sm ${
+                    isEditing ? "bg-emerald-50/60" : ""
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p
+                      className="truncate font-semibold text-slate-950"
+                      title={appliance.name}
+                    >
+                      {appliance.name}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      {appliance.category}
+                    </p>
+                  </div>
+                  <div className="text-slate-600">
+                    {formatNumber(appliance.wattage)} W × {appliance.quantity}
+                  </div>
+                  <div className="text-slate-600">
+                    {appliance.hours_per_day} h/day · {appliance.days_per_month} d
+                  </div>
+                  <div className="font-semibold text-slate-950">
+                    {formatNumber(Math.round(kwh))} kWh
+                  </div>
+                  <div className="font-semibold text-emerald-700">
+                    {formatPeso(kwh * rate, { decimals: 0 })}
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => editItem(index)}
+                      className="rounded-xl bg-emerald-50 p-2 text-emerald-700 transition hover:bg-emerald-100"
+                      title="Edit appliance"
+                    >
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(index)}
+                      className="rounded-xl bg-red-50 p-2 text-red-700 transition hover:bg-red-100"
+                      title="Remove from list"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="rounded-b-2xl bg-slate-50 p-4">
+        <ApplianceFields form={draft} setForm={updateDraft} rate={rate} />
+
+        {draftError && (
+          <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+            {draftError}
+          </p>
+        )}
+
+        <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          {(editingIndex !== null || isApplianceDraftStarted(draft)) && (
             <button
               type="button"
-              disabled={isSaving}
-              onClick={onSave}
-              className="rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={clearDraft}
+              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
-              {isSaving ? "Saving..." : "Save Building"}
+              {editingIndex !== null ? "Cancel Edit" : "Clear"}
             </button>
           )}
+
+          <button
+            type="button"
+            onClick={addToList}
+            className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-white px-5 py-3 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+          >
+            {editingIndex !== null ? <Pencil size={17} /> : <Plus size={17} />}
+            {editingIndex !== null ? "Update Appliance" : "Add to List"}
+          </button>
         </div>
       </div>
     </div>
@@ -465,7 +827,7 @@ const APPLIANCE_ROW_COLUMNS = "1.6fr 0.8fr 0.7fr 0.9fr 1fr 1fr 90px";
 
 function ApplianceModal({ building, rate, onClose, showToast }) {
   const [appliances, setAppliances] = useState([]);
-  const [form, setForm] = useState(emptyApplianceForm);
+  const [form, setForm] = useState(EMPTY_APPLIANCE_FORM);
   const [editingId, setEditingId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -512,25 +874,8 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
   }, [buildingId]);
 
   function resetForm() {
-    setForm(emptyApplianceForm);
+    setForm(EMPTY_APPLIANCE_FORM);
     setEditingId(null);
-  }
-
-  function applyPreset(label) {
-    const preset = appliancePresets.find((item) => item.label === label);
-
-    if (!preset) {
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      name: preset.label,
-      category: preset.category,
-      wattage: String(preset.wattage),
-      hours_per_day: String(preset.hours_per_day),
-      days_per_month: String(preset.days_per_month),
-    }));
   }
 
   function startEdit(appliance) {
@@ -546,58 +891,16 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
   }
 
   async function submitForm() {
-    if (!form.name.trim()) {
-      showToast("Please enter the appliance name.", "error");
-      return;
-    }
+    const { payload: fields, error: invalid } = validateApplianceForm(form);
 
-    if (form.wattage === "" || Number(form.wattage) <= 0) {
-      showToast("Please enter the wattage (watts).", "error");
-      return;
-    }
-
-    const hours = Number(form.hours_per_day);
-
-    if (form.hours_per_day === "" || !Number.isFinite(hours) || hours < 0) {
-      showToast("Please enter the hours used per day.", "error");
-      return;
-    }
-
-    // The input carries max="24" but there is no wrapping <form>, so the attribute
-    // never fires and 30 hours a day used to save fine.
-    if (hours > 24) {
-      showToast("Hours per day cannot be more than 24.", "error");
-      return;
-    }
-
-    // quantity and days_per_month were completely unvalidated. `Number(x) || 1`
-    // quietly turned 0 into 1, and a negative number is truthy so -5 passed
-    // straight through and produced negative kWh and negative pesos in the totals.
-    const quantity = Number(form.quantity);
-
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      showToast("Quantity must be a whole number of 1 or more.", "error");
-      return;
-    }
-
-    const daysPerMonth = Number(form.days_per_month);
-
-    if (!Number.isInteger(daysPerMonth) || daysPerMonth < 1 || daysPerMonth > 31) {
-      showToast("Days per month must be a whole number between 1 and 31.", "error");
+    if (invalid) {
+      showToast(invalid, "error");
       return;
     }
 
     setIsSaving(true);
 
-    const payload = {
-      building_id: buildingId,
-      name: form.name.trim(),
-      category: form.category,
-      wattage: Number(form.wattage),
-      quantity,
-      hours_per_day: hours,
-      days_per_month: daysPerMonth,
-    };
+    const payload = { building_id: buildingId, ...fields };
 
     try {
       const url = editingId
@@ -740,133 +1043,7 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
               </p>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <Field label="Quick Pick" helper="Auto-fills name, category, wattage, and typical usage. You can still edit any field.">
-                <select
-                  value=""
-                  onChange={(event) => applyPreset(event.target.value)}
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600"
-                >
-                  <option value="">Select common appliance...</option>
-                  {appliancePresets.map((preset) => (
-                    <option key={preset.label} value={preset.label}>
-                      {preset.label} ({preset.wattage} W)
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Appliance Name">
-                <input
-                  value={form.name}
-                  onChange={(event) =>
-                    setForm({ ...form, name: event.target.value })
-                  }
-                  placeholder="Example: Split-type Aircon"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
-                />
-              </Field>
-
-              <Field label="Category">
-                <select
-                  value={form.category}
-                  onChange={(event) =>
-                    setForm({ ...form, category: event.target.value })
-                  }
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600"
-                >
-                  {applianceCategories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field label="Wattage (W)" helper="Rated power on the label.">
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={form.wattage}
-                  onChange={(event) =>
-                    setForm({ ...form, wattage: event.target.value })
-                  }
-                  placeholder="Example: 1120"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
-                />
-              </Field>
-
-              <Field label="Quantity">
-                <input
-                  type="number"
-                  min="1"
-                  value={form.quantity}
-                  onChange={(event) =>
-                    setForm({ ...form, quantity: event.target.value })
-                  }
-                  placeholder="1"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
-                />
-              </Field>
-
-              <Field label="Hours / Day">
-                <input
-                  type="number"
-                  step="any"
-                  min="0"
-                  max="24"
-                  value={form.hours_per_day}
-                  onChange={(event) =>
-                    setForm({ ...form, hours_per_day: event.target.value })
-                  }
-                  placeholder="Example: 8"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
-                />
-              </Field>
-
-              <Field label="Days / Month">
-                <input
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={form.days_per_month}
-                  onChange={(event) =>
-                    setForm({ ...form, days_per_month: event.target.value })
-                  }
-                  placeholder="30"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600"
-                />
-              </Field>
-
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 xl:col-span-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                  This appliance ≈
-                </p>
-                <p className="mt-1 text-sm font-semibold text-emerald-800">
-                  {formatNumber(
-                    Math.round(
-                      applianceKwhMonth({
-                        wattage: form.wattage,
-                        quantity: form.quantity,
-                        hours_per_day: form.hours_per_day,
-                        days_per_month: form.days_per_month,
-                      })
-                    )
-                  )}{" "}
-                  kWh ·{" "}
-                  {formatPeso(
-                    applianceKwhMonth({
-                      wattage: form.wattage,
-                      quantity: form.quantity,
-                      hours_per_day: form.hours_per_day,
-                      days_per_month: form.days_per_month,
-                    }) * rate
-                  )}{" "}
-                  / month
-                </p>
-              </div>
-            </div>
+            <ApplianceFields form={form} setForm={setForm} rate={rate} />
 
             <div className="mt-4 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               {editingId && (
@@ -1044,6 +1221,10 @@ const BuildingsList = ({ role = "Staff" }) => {
   const [isRemovingSamples, setIsRemovingSamples] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [applianceBuilding, setApplianceBuilding] = useState(null);
+  const [profileBuilding, setProfileBuilding] = useState(null);
+  // Appliances listed inside Add Building, saved after the building itself.
+  const [newAppliances, setNewAppliances] = useState([]);
+  const [applianceDraft, setApplianceDraft] = useState(EMPTY_APPLIANCE_FORM);
   const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
 
   function showToast(message, type = "success") {
@@ -1091,7 +1272,11 @@ const BuildingsList = ({ role = "Staff" }) => {
     {
       intervalMs: AUTO_REFRESH_MS,
       enabled:
-        !modal && !confirmation && !isLocationPickerOpen && !applianceBuilding,
+        !modal &&
+        !confirmation &&
+        !isLocationPickerOpen &&
+        !applianceBuilding &&
+        !profileBuilding,
       runOnMount: true,
     }
   );
@@ -1149,12 +1334,9 @@ const BuildingsList = ({ role = "Staff" }) => {
 
   function openAddModal() {
     setForm(emptyForm);
+    setNewAppliances([]);
+    setApplianceDraft(EMPTY_APPLIANCE_FORM);
     setModal({ mode: "add" });
-  }
-
-  function openViewModal(building) {
-    setForm(normalizeBuilding(building));
-    setModal({ mode: "view", buildingId: building.building_id });
   }
 
   function openEditModal(building) {
@@ -1197,8 +1379,47 @@ const BuildingsList = ({ role = "Staff" }) => {
     return true;
   }
 
+  // Creates each listed appliance under the new building. The building already
+  // exists by now, so a failure here is reported rather than undoing it.
+  async function saveNewAppliances(buildingId) {
+    let failed = 0;
+    let firstError = "";
+
+    for (const appliance of newAppliances) {
+      try {
+        const response = await apiFetch(`${API_BASE_URL}/appliances/`, {
+          method: "POST",
+          body: JSON.stringify({ building_id: buildingId, ...appliance }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          failed += 1;
+          firstError ||= typeof data.detail === "string" ? data.detail : "";
+        }
+      } catch (error) {
+        console.error("Save appliance error:", error);
+        failed += 1;
+        firstError ||= "Cannot connect to server.";
+      }
+    }
+
+    return { failed, firstError };
+  }
+
   async function saveBuilding() {
     if (!validateForm()) {
+      return;
+    }
+
+    const isEdit = modal?.mode === "edit";
+
+    // Saving now would silently drop what they typed.
+    if (!isEdit && isApplianceDraftStarted(applianceDraft)) {
+      showToast(
+        "Finish the appliance you started: click Add to List (or Update Appliance), or Clear it.",
+        "error"
+      );
       return;
     }
 
@@ -1207,7 +1428,6 @@ const BuildingsList = ({ role = "Staff" }) => {
     const payload = buildPayload(form);
 
     try {
-      const isEdit = modal?.mode === "edit";
 
       const url = isEdit
         ? `${API_BASE_URL}/buildings/${modal.buildingId}`
@@ -1228,15 +1448,37 @@ const BuildingsList = ({ role = "Staff" }) => {
         return;
       }
 
-      showToast(
-        isEdit
-          ? "Building updated successfully."
-          : "Building added successfully.",
-        "success"
-      );
+      const applianceCount = isEdit ? 0 : newAppliances.length;
+      const { failed, firstError } = applianceCount
+        ? await saveNewAppliances(data.building_id)
+        : { failed: 0, firstError: "" };
+
+      if (failed > 0) {
+        showToast(
+          `Building added, but ${failed} of ${applianceCount} appliance${
+            applianceCount === 1 ? "" : "s"
+          } could not be saved${firstError ? ` (${firstError})` : ""}. Add ${
+            failed === 1 ? "it" : "them"
+          } with the plug icon.`,
+          "error"
+        );
+      } else {
+        showToast(
+          isEdit
+            ? "Building updated successfully."
+            : applianceCount
+            ? `Building added with ${applianceCount} appliance${
+                applianceCount === 1 ? "" : "s"
+              }.`
+            : "Building added successfully.",
+          "success"
+        );
+      }
 
       setModal(null);
       setForm(emptyForm);
+      setNewAppliances([]);
+      setApplianceDraft(EMPTY_APPLIANCE_FORM);
       await fetchBuildings(false);
     } catch (error) {
       console.error("Save building error:", error);
@@ -1691,16 +1933,24 @@ const BuildingsList = ({ role = "Staff" }) => {
                 {filteredBuildings.map((building) => (
                   <div
                     key={building.building_id}
-                    className="grid grid-cols-[90px_1.2fr_1fr_1.2fr_1fr_130px_210px] items-center px-4 text-sm h-[72px] overflow-hidden"
+                    onClick={() => setProfileBuilding(building)}
+                    className="grid h-[72px] cursor-pointer grid-cols-[90px_1.2fr_1fr_1.2fr_1fr_130px_210px] items-center overflow-hidden px-4 text-sm transition hover:bg-emerald-50/40"
                   >
                     <div className="font-semibold text-slate-700">
                       #{building.building_id}
                     </div>
 
                     <div className="min-w-0 overflow-hidden">
-                      <p className="truncate font-semibold text-slate-950">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setProfileBuilding(building);
+                        }}
+                        className="block max-w-full truncate text-left font-semibold text-slate-950 hover:text-emerald-700 hover:underline"
+                      >
                         {building.name}
-                      </p>
+                      </button>
 
                       <p className="mt-1 truncate text-xs font-normal text-slate-400" title={building.address || "No address"}>
                         {building.address || "No address"}
@@ -1739,12 +1989,16 @@ const BuildingsList = ({ role = "Staff" }) => {
                       </span>
                     </div>
 
-                    <div className="flex flex-wrap gap-2">
+                    {/* The row opens the profile; these buttons do their own thing. */}
+                    <div
+                      className="flex flex-wrap gap-2"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       <button
                         type="button"
-                        onClick={() => openViewModal(building)}
+                        onClick={() => setProfileBuilding(building)}
                         className="rounded-xl bg-slate-100 p-2 text-slate-600 transition hover:bg-slate-200"
-                        title="View building"
+                        title="View building profile"
                       >
                         <Eye size={16} />
                       </button>
@@ -1794,7 +2048,23 @@ const BuildingsList = ({ role = "Staff" }) => {
         onSave={saveBuilding}
         isSaving={isSaving}
         onOpenLocationPicker={() => setIsLocationPickerOpen(true)}
+        rate={rate}
+        newAppliances={newAppliances}
+        setNewAppliances={setNewAppliances}
+        applianceDraft={applianceDraft}
+        setApplianceDraft={setApplianceDraft}
       />
+
+      {profileBuilding && (
+        <Suspense fallback={null}>
+          <BuildingProfile
+            key={profileBuilding.building_id}
+            buildingId={profileBuilding.building_id}
+            buildingName={profileBuilding.name}
+            onClose={() => setProfileBuilding(null)}
+          />
+        </Suspense>
+      )}
 
       {applianceBuilding && (
         <ApplianceModal

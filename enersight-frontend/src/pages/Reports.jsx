@@ -11,6 +11,7 @@ import {
   FileText,
   Gauge,
   Printer,
+  Save,
   Search,
   ShieldCheck,
   TrendingUp,
@@ -46,6 +47,7 @@ import {
 import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
+import InfoHint from "../components/InfoHint";
 import SkeletonRows from "../components/SkeletonRows";
 import {
   PERIOD_OPTIONS,
@@ -610,8 +612,15 @@ function PrintTemplate({
 // Kept next to each real row's grid-cols-[...] class so the two stay in step.
 const REPORT_ROW_COLUMNS = "1.3fr 0.6fr 0.7fr 1fr 1fr 1fr 1fr 0.9fr 0.9fr";
 
+// Mirrors the grid-template on the saved-report rows.
+const SAVED_REPORT_ROW_COLUMNS = "1.6fr 1.1fr 0.8fr 0.9fr 0.8fr 1fr";
+
 const Reports = () => {
   const [buildings, setBuildings] = useState([]);
+  // Saved snapshots of reports that were generated, so "audit support" means a
+  // record that exists rather than a page that can be re-run.
+  const [savedReports, setSavedReports] = useState([]);
+  const [isSavingReport, setIsSavingReport] = useState(false);
   const [meters, setMeters] = useState([]);
   const [readings, setReadings] = useState([]);
   const [reportType, setReportType] = useState("Monthly Building Report");
@@ -739,6 +748,22 @@ const Reports = () => {
     return Array.isArray(data) ? data.map(normalizeReading) : [];
   }
 
+  async function loadSavedReports() {
+    try {
+      const response = await apiFetch(`${API_BASE_URL}/reports/`);
+
+      if (!response.ok) {
+        return;
+      }
+
+      setSavedReports(await response.json());
+    } catch {
+      // A failed history load must not take the report page down with it: the
+      // figures above come from readings, not from this list.
+      setSavedReports([]);
+    }
+  }
+
   async function refreshData(showSuccessToast = false) {
     setIsLoading(true);
 
@@ -751,6 +776,7 @@ const Reports = () => {
 
       setBuildings(buildingData);
       setMeters(meterData);
+      loadSavedReports();
       // Stamped on the full list, before the period filter can drop the previous
       // reading that each one's time window is measured from.
       setReadings(annotateReadingCoverage(readingData));
@@ -1110,6 +1136,39 @@ const Reports = () => {
     window.print();
   }
 
+  async function saveReport() {
+    setIsSavingReport(true);
+
+    try {
+      const matched = buildings.find((item) => item.name === buildingFilter);
+      const response = await apiFetch(`${API_BASE_URL}/reports/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          building_id: matched ? matched.building_id : null,
+          report_type: `${reportType} - ${periodLabel}`.slice(0, 120),
+          total_consumption: Math.max(0, totalConsumption),
+          average_consumption: Math.max(0, monthlyConsumption || 0),
+          peak_consumption: Math.max(0, highestReading),
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        showToast(detail?.detail || "Could not save this report.", "error");
+        return;
+      }
+
+      const saved = await response.json();
+      setSavedReports((current) => [saved, ...current]);
+      showToast("Report saved to the audit records.", "success");
+    } catch {
+      showToast("Could not reach the server to save this report.", "error");
+    } finally {
+      setIsSavingReport(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <ToastMessage
@@ -1145,6 +1204,14 @@ const Reports = () => {
 
               <HeaderActionButton icon={Printer} onClick={printReport}>
                 Print
+              </HeaderActionButton>
+
+              <HeaderActionButton
+                icon={Save}
+                onClick={saveReport}
+                disabled={isSavingReport || reportFilteredRows.length === 0}
+              >
+                {isSavingReport ? "Saving..." : "Save to records"}
               </HeaderActionButton>
 
               <HeaderActionButton
@@ -1259,13 +1326,15 @@ const Reports = () => {
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 print:hidden">
         <StatCard
           title="Total Energy Used"
+          hint="measuredVsEstimated"
           value={formatNumber(totalConsumption)}
           icon={FileText}
           description={`kWh · ≈ ${formatPeso(totalCost, { decimals: 0 })} estimated bill`}
         />
 
         <StatCard
-          title="Per Month"
+          title="Average per Month"
+          hint="annualised"
           value={monthlyConsumption === null ? "—" : formatNumber(monthlyConsumption)}
           icon={FileSpreadsheet}
           tone="blue"
@@ -1277,7 +1346,7 @@ const Reports = () => {
         />
 
         <StatCard
-          title="Highest Reading"
+          title="Largest Single Reading"
           value={formatNumber(highestReading)}
           icon={TrendingUp}
           tone="red"
@@ -1286,6 +1355,7 @@ const Reports = () => {
 
         <StatCard
           title="Needs Review"
+          hint="needsReview"
           value={pendingCount}
           icon={AlertTriangle}
           tone="amber"
@@ -1390,6 +1460,82 @@ const Reports = () => {
         })}
       </section>
 
+      {/* The audit trail the paper's ERD describes: not a second reporting engine,
+          just a record that a report was generated, by whom, and what it said at
+          the time. A report re-run next month can legitimately differ, because
+          readings get corrected and verified after the fact. */}
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-950">Saved Reports</h2>
+            <p className="mt-1 text-sm font-normal text-slate-400">
+              Snapshots kept for audit support.
+            </p>
+          </div>
+
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-500">
+            <ClipboardCheck size={13} />
+            {savedReports.length} saved
+          </span>
+        </div>
+
+        {savedReports.length === 0 ? (
+          <EmptyState
+            icon={ClipboardList}
+            title="No saved reports yet"
+            description="Use Save to records above to keep a snapshot of the report currently on screen."
+          />
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-slate-100">
+            <div
+              className="grid gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400"
+              style={{ gridTemplateColumns: SAVED_REPORT_ROW_COLUMNS }}
+            >
+              <span>Report</span>
+              <span>Scope</span>
+              <span className="text-right">Total kWh</span>
+              <span className="text-right">Avg / month</span>
+              <span className="text-right">Peak</span>
+              <span className="text-right">Generated</span>
+            </div>
+
+            {savedReports.map((report) => (
+              <div
+                key={report.report_id}
+                className="grid items-center gap-2 border-b border-slate-50 px-4 py-2.5 text-xs last:border-b-0"
+                style={{ gridTemplateColumns: SAVED_REPORT_ROW_COLUMNS }}
+              >
+                <span className="truncate font-medium text-slate-700">
+                  {report.report_type || "Report"}
+                </span>
+
+                <span className="truncate text-slate-500">
+                  {report.building_id === null || report.building_id === undefined
+                    ? "All buildings"
+                    : getBuildingName(report.building_id)}
+                </span>
+
+                <span className="text-right tabular-nums text-slate-600">
+                  {formatNumber(report.total_consumption)}
+                </span>
+
+                <span className="text-right tabular-nums text-slate-600">
+                  {formatNumber(report.average_consumption)}
+                </span>
+
+                <span className="text-right tabular-nums text-slate-600">
+                  {formatNumber(report.peak_consumption)}
+                </span>
+
+                <span className="text-right text-slate-400">
+                  {formatDateTime(report.generated_at)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
@@ -1430,7 +1576,10 @@ const Reports = () => {
               <div>Total</div>
               <div>Est. Cost</div>
               <div>Per Month</div>
-              <div>EUI</div>
+              <div className="flex items-center gap-1">
+                EUI
+                <InfoHint term="eui" />
+              </div>
               <div>OCR Avg.</div>
               <div>Status</div>
             </div>

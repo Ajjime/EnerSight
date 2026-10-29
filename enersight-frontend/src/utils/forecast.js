@@ -1,9 +1,12 @@
 // Shared consumption forecasting used by the Dashboard and Analytics pages.
 // Both build the same model (buildForecastModel) over historical monthly totals
 // and lead with whichever estimate tested best on recent months:
-//   · Moving average       — flat projection of the last N months
-//   · Linear trend         — least-squares fit extended forward
-//   · Same month last year — last year's month, scaled by recent growth
+//   · Moving average               — mean of the last 3 months, projected flat
+//   · Weighted moving average      — same window, newest month weighted most
+//   · Simple exponential smoothing — smoothed level carried forward
+//
+// These are the three estimators the study tests and compares. Keep this list
+// and FORECAST_METHODS in step with Table 4 of the manuscript.
 //
 // Two things this deliberately gets right, having previously got them wrong:
 //
@@ -49,9 +52,9 @@ export const MIN_MONTHS_FOR_FORECAST = 3;
 // method chip. Kept here rather than in ForecastChart.jsx because a component
 // file that also exports constants breaks React fast refresh.
 export const FORECAST_COLORS = {
-  average: "#059669",
-  trend: "#64748b",
-  seasonal: "#d97706",
+  average: "#2a78d6",
+  wma: "#eb6834",
+  ses: "#4a3aa7",
 };
 
 /** "YYYY-MM" -> absolute month number, for arithmetic across year boundaries. */
@@ -149,78 +152,64 @@ export function computeMovingAvgForecast(values, windowSize = 3, horizon = 3) {
 }
 
 /**
- * Ordinary least squares over the series, extended forward.
- *
- * x is the position in the series, which is the month offset because the caller
- * passes a gap-filled series. Zero months are real observations here.
+ * Weighted moving average over the last `windowSize` months, with linearly
+ * increasing weights so the newest month counts most (1, 2, 3 across a 3-month
+ * window). Flat across the horizon, like the plain moving average.
  */
-export function computeLinearForecast(values, horizon = 3) {
-  const n = values.length;
-
-  if (n < 2) {
-    return Array(horizon).fill(n === 1 ? Math.round(values[0]) : 0);
+export function computeWeightedMovingAvgForecast(
+  values,
+  windowSize = 3,
+  horizon = 3
+) {
+  if (!values.length) {
+    return Array(horizon).fill(0);
   }
 
-  const x = values.map((_, index) => index);
-  const sumX = x.reduce((sum, value) => sum + value, 0);
-  const sumY = values.reduce((sum, value) => sum + value, 0);
-  const sumXY = x.reduce((sum, value, index) => sum + value * values[index], 0);
-  const sumX2 = x.reduce((sum, value) => sum + value * value, 0);
-  const denom = n * sumX2 - sumX * sumX;
+  const size = Math.min(windowSize, values.length);
+  const slice = values.slice(-size);
 
-  if (denom === 0) {
-    return Array(horizon).fill(Math.round(sumY / n));
-  }
+  let weighted = 0;
+  let weightTotal = 0;
 
-  const slope = (n * sumXY - sumX * sumY) / denom;
-  const intercept = (sumY - slope * sumX) / n;
-
-  return Array.from({ length: horizon }, (_, i) =>
-    Math.max(0, Math.round(intercept + slope * (n + i)))
-  );
-}
-
-/**
- * Coefficient of determination for the linear fit, 0 to 1. Reported so the UI can
- * say how well the trend actually describes the data instead of drawing a
- * confident-looking line over noise.
- */
-export function computeLinearFitQuality(values) {
-  const n = values.length;
-
-  if (n < 3) {
-    return 0;
-  }
-
-  const mean = values.reduce((sum, value) => sum + value, 0) / n;
-  const x = values.map((_, index) => index);
-  const sumX = x.reduce((sum, value) => sum + value, 0);
-  const sumY = values.reduce((sum, value) => sum + value, 0);
-  const sumXY = x.reduce((sum, value, index) => sum + value * values[index], 0);
-  const sumX2 = x.reduce((sum, value) => sum + value * value, 0);
-  const denom = n * sumX2 - sumX * sumX;
-
-  if (denom === 0) {
-    return 0;
-  }
-
-  const slope = (n * sumXY - sumX * sumY) / denom;
-  const intercept = (sumY - slope * sumX) / n;
-
-  let residual = 0;
-  let total = 0;
-
-  values.forEach((value, index) => {
-    const predicted = intercept + slope * index;
-    residual += (value - predicted) ** 2;
-    total += (value - mean) ** 2;
+  slice.forEach((value, index) => {
+    const weight = index + 1;
+    weighted += value * weight;
+    weightTotal += weight;
   });
 
-  if (total === 0) {
-    return 0;
+  return Array(horizon).fill(Math.max(0, Math.round(weighted / weightTotal)));
+}
+
+// Smoothing constant for simple exponential smoothing. 0.3 leans on the history
+// rather than chasing the newest month. It is a fixed, documented constant
+// rather than a fitted one, so the projection can be explained without also
+// having to explain a search procedure.
+export const SES_ALPHA = 0.3;
+
+/**
+ * Simple exponential smoothing, level only.
+ *
+ *   S(1) = y(1),  S(t) = alpha * y(t) + (1 - alpha) * S(t-1),  forecast = S(n)
+ *
+ * SES without a trend component projects that level forward flat, so every month
+ * of the horizon carries the same figure.
+ */
+export function computeExponentialSmoothingForecast(
+  values,
+  horizon = 3,
+  alpha = SES_ALPHA
+) {
+  if (!values.length) {
+    return Array(horizon).fill(0);
   }
 
-  return Math.max(0, Math.min(1, 1 - residual / total));
+  let level = values[0];
+
+  for (let index = 1; index < values.length; index += 1) {
+    level = alpha * values[index] + (1 - alpha) * level;
+  }
+
+  return Array(horizon).fill(Math.max(0, Math.round(level)));
 }
 
 /** Month-only labels ("Sep" -> ["Oct", "Nov"]) for the year-less axis. */
@@ -253,92 +242,84 @@ export function getNextMonthLabelsFromKey(lastSortKey, count) {
   });
 }
 
-// A seasonal estimate needs a full year of history to look back on.
-export const MIN_MONTHS_FOR_SEASONAL = 12;
-
-/**
- * Same month last year, scaled by how the most recent months compare with the same
- * months a year earlier.
- *
- * Building load here follows the hot season (peaking around April), so a straight
- * line through a year of it points the wrong way for half of that year: on the demo
- * data the linear trend kept climbing into September while usage had been falling
- * for four months and last September was a third lower.
- *
- * Returns null with less than a year of history.
- */
-export function computeSeasonalForecast(values, horizon = 3) {
-  const n = values.length;
-
-  if (n < MIN_MONTHS_FOR_SEASONAL) {
-    return null;
-  }
-
-  const compareMonths = Math.min(3, n - 12);
-  let ratio = 1;
-
-  if (compareMonths > 0) {
-    const recent = values
-      .slice(n - compareMonths)
-      .reduce((sum, value) => sum + value, 0);
-    const yearEarlier = values
-      .slice(n - compareMonths - 12, n - 12)
-      .reduce((sum, value) => sum + value, 0);
-
-    if (recent > 0 && yearEarlier > 0) {
-      // Clamped so one unusual month cannot double or halve the whole projection.
-      ratio = Math.min(2, Math.max(0.5, recent / yearEarlier));
-    }
-  }
-
-  return Array.from({ length: horizon }, (_, i) =>
-    Math.max(0, Math.round(values[n - 12 + (i % 12)] * ratio))
-  );
-}
-
 const FORECAST_METHODS = {
   average: {
     label: "Moving average",
+    // Table 4's abbreviation, for the narrow Dashboard card.
+    shortLabel: "Moving avg",
     minMonths: MIN_MONTHS_FOR_FORECAST,
     run: (values, horizon) => computeMovingAvgForecast(values, 3, horizon),
   },
-  trend: {
-    label: "Linear trend",
+  wma: {
+    label: "Weighted moving average",
+    shortLabel: "Weighted MA",
     minMonths: MIN_MONTHS_FOR_FORECAST,
-    run: (values, horizon) => computeLinearForecast(values, horizon),
+    run: (values, horizon) =>
+      computeWeightedMovingAvgForecast(values, 3, horizon),
   },
-  seasonal: {
-    label: "Same month last year",
-    minMonths: MIN_MONTHS_FOR_SEASONAL,
-    run: (values, horizon) => computeSeasonalForecast(values, horizon),
+  ses: {
+    label: "Simple exponential smoothing",
+    shortLabel: "Exp. smoothing",
+    minMonths: MIN_MONTHS_FOR_FORECAST,
+    run: (values, horizon) => computeExponentialSmoothingForecast(values, horizon),
   },
 };
 
 /**
- * Mean absolute percentage error when `run` forecasts the last `holdout` months
- * using only the months before them. Zero months are skipped, since there is no
- * percentage error against nothing.
+ * How accurate `run` is when it forecasts the last `holdout` months from only
+ * the months before them.
+ *
+ * Reports the four measures the three estimators are compared on:
+ *   mae  - mean absolute error, in kWh
+ *   rmse - root mean squared error; punishes the occasional large miss harder
+ *   mape - mean absolute percentage error; scale-free, and what the ranking uses
+ *   r2   - 1 - SSres/SStot against the mean of the held-out months
+ *
+ * Months with no reading (0 kWh) are skipped for MAPE, which has no meaning
+ * against zero, but still count towards MAE, RMSE and R2.
+ *
+ * R2 is routinely negative on a short holdout: it compares the forecast with
+ * "just predict the mean of the test months", and the mean is computed with
+ * hindsight the forecaster did not have. A negative value is a real result, not
+ * a bug, so it is reported as it comes out.
  */
-function backtestError(values, run, holdout) {
+function backtestMetrics(values, run, holdout) {
   const training = values.slice(0, values.length - holdout);
   const actual = values.slice(values.length - holdout);
   const predicted = run(training, holdout);
 
-  if (!predicted) {
+  if (!predicted || actual.length === 0) {
     return null;
   }
 
-  let total = 0;
-  let count = 0;
+  let absTotal = 0;
+  let squareTotal = 0;
+  let percentTotal = 0;
+  let percentCount = 0;
 
   actual.forEach((value, index) => {
+    const error = predicted[index] - value;
+
+    absTotal += Math.abs(error);
+    squareTotal += error * error;
+
     if (value > 0) {
-      total += Math.abs(predicted[index] - value) / value;
-      count += 1;
+      percentTotal += Math.abs(error) / value;
+      percentCount += 1;
     }
   });
 
-  return count ? total / count : null;
+  const mean = actual.reduce((sum, value) => sum + value, 0) / actual.length;
+  const spread = actual.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+
+  return {
+    mae: absTotal / actual.length,
+    rmse: Math.sqrt(squareTotal / actual.length),
+    // Null rather than 0: "no month to measure against" is not "no error".
+    mape: percentCount ? percentTotal / percentCount : null,
+    // One held-out month has no spread to explain, so R2 is undefined for it.
+    r2: spread > 0 ? 1 - squareTotal / spread : null,
+  };
 }
 
 /**
@@ -376,22 +357,39 @@ function prepareForecastSeries(points) {
 }
 
 /**
- * Everything the Analytics forecast panel shows: each method's projection, how far
- * off each one was when tested on recent months, and which one to lead with.
+ * Size of the test window, as a 70% training / 30% test split of the series.
  *
- * The leading method is whichever came closest on the most recent months when
- * forecasting them from the months before. That is a claim anyone can check, unlike
- * showing two disagreeing numbers with nothing to say which one to believe.
+ * Never large enough to drop training below MIN_MONTHS_FOR_FORECAST, and returns
+ * 0 when the series is too short to hold anything back at all - at which point
+ * nothing can be ranked and the moving average leads by default.
+ */
+export function getHoldoutMonths(n) {
+  const maxHoldout = n - MIN_MONTHS_FOR_FORECAST;
+
+  if (maxHoldout < 1) {
+    return 0;
+  }
+
+  return Math.max(1, Math.min(maxHoldout, Math.round(n * 0.3)));
+}
+
+/**
+ * Everything the Analytics forecast panel shows: each method's projection, how
+ * accurate each one was when tested on the held-out months, and which one to
+ * lead with.
+ *
+ * The leading method is whichever came closest on the test months when
+ * forecasting them from the months before. That is a claim anyone can check,
+ * unlike showing three disagreeing numbers with nothing to say which to believe.
  *
  * Returns null when there is not enough history to forecast responsibly.
  *
  * @returns {{
- *   series: Array<{ month, actual, average, trend, seasonal, isGap, isForecast }>,
- *   methods: Array<{ key, label, minMonths, available, projection, error }>,
+ *   series: Array<{ month, actual, average, wma, ses, isGap, isForecast }>,
+ *   methods: Array<{ key, label, shortLabel, minMonths, available, projection, metrics, error }>,
  *   bestKey: string,
  *   testedMonths: number,
- *   trendFit: number,
- *   recentAverage: number,
+ *   baselineAverage: number,
  * } | null}
  */
 export function buildForecastModel(points, horizon, buildFutureLabels) {
@@ -404,30 +402,28 @@ export function buildForecastModel(points, horizon, buildFutureLabels) {
   const values = series.map((point) => point.value);
   const n = values.length;
 
-  // All methods are tested on the same most-recent months so their errors compare.
-  // The seasonal method needs a full year before the months it is tested on, so once
-  // it can be tested at all (13+ months) the test window shrinks to fit it. Before
-  // that it is still drawn, but left out of the ranking.
-  const baseHoldout = Math.min(3, n - MIN_MONTHS_FOR_FORECAST);
-  const testedMonths =
-    n > MIN_MONTHS_FOR_SEASONAL
-      ? Math.min(baseHoldout, n - MIN_MONTHS_FOR_SEASONAL)
-      : baseHoldout;
+  // Every method is tested on the same held-out months so the errors compare.
+  const testedMonths = getHoldoutMonths(n);
 
   const methods = Object.entries(FORECAST_METHODS).map(([key, method]) => {
     const projection = method.run(values, horizon);
     const isTestable = testedMonths > 0 && n - testedMonths >= method.minMonths;
+    const metrics =
+      projection && isTestable
+        ? backtestMetrics(values, method.run, testedMonths)
+        : null;
 
     return {
       key,
       label: method.label,
+      shortLabel: method.shortLabel,
       minMonths: method.minMonths,
       available: Boolean(projection),
       projection: projection || null,
-      error:
-        projection && isTestable
-          ? backtestError(values, method.run, testedMonths)
-          : null,
+      metrics,
+      // The ranking figure, kept under its old name so callers that only want
+      // "how far off was it" need not reach into metrics.
+      error: metrics ? metrics.mape : null,
     };
   });
 
@@ -456,8 +452,8 @@ export function buildForecastModel(points, horizon, buildFutureLabels) {
     actual: point.value,
     isGap: Boolean(point.isGap),
     isForecast: false,
-    // Each estimate's first month is also written onto the last real month, so its
-    // dashed line starts at the last bar instead of floating on its own.
+    // Each estimate's first month is also written onto the last real month, so
+    // its dashed line starts at the last bar instead of floating on its own.
     ...(index === n - 1 ? projectionsAt(0) : noProjections),
   }));
 
@@ -471,35 +467,44 @@ export function buildForecastModel(points, horizon, buildFutureLabels) {
     })
   );
 
-  const recentValues = values.slice(-3);
+  // Six months, not three. The direction indicator compares the forecast against
+  // this, and every estimator is built from the last THREE months - so a
+  // three-month baseline made the moving average compare a number with itself
+  // and report "Steady" forever, even while consumption fell 11% across that
+  // same stretch. The baseline has to be wider than the window the forecast is
+  // drawn from, or the comparison carries no information.
+  const baselineValues = values.slice(-6);
 
   return {
     series: historical.concat(upcoming),
     methods,
     bestKey: best.key,
     testedMonths: tested.length ? testedMonths : 0,
-    trendFit: computeLinearFitQuality(values),
-    recentAverage:
-      recentValues.reduce((sum, value) => sum + value, 0) / recentValues.length,
+    baselineAverage:
+      baselineValues.reduce((sum, value) => sum + value, 0) / baselineValues.length,
   };
 }
 
 /**
- * Whether the leading estimate points up, down or flat compared with the last
- * three real months. Within 3% either way counts as steady.
+ * Whether the leading estimate sits above or below the last six months of actual
+ * consumption. Within 3% either way counts as steady.
+ *
+ * Six months is deliberate - see baselineValues in buildForecastModel. Compared
+ * against the same three months every estimator is built from, this could only
+ * ever return "Steady".
  *
  * @returns {{ label: "Rising" | "Falling" | "Steady", change: number }}
  */
 export function getForecastDirection(model) {
   const best = model?.methods.find((method) => method.key === model.bestKey);
 
-  if (!best?.projection?.length || !(model.recentAverage > 0)) {
+  if (!best?.projection?.length || !(model.baselineAverage > 0)) {
     return { label: "Steady", change: 0 };
   }
 
   const average =
     best.projection.reduce((sum, value) => sum + value, 0) / best.projection.length;
-  const change = (average - model.recentAverage) / model.recentAverage;
+  const change = (average - model.baselineAverage) / model.baselineAverage;
 
   return {
     label: change > 0.03 ? "Rising" : change < -0.03 ? "Falling" : "Steady",

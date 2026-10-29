@@ -22,7 +22,7 @@ function getBridgeMonth(model) {
   return model.series.filter((row) => !row.isForecast).at(-1)?.month;
 }
 
-function ForecastTooltip({ active, payload, label, model }) {
+function ForecastTooltip({ active, payload, label, model, leadingOnly }) {
   if (!active || !payload || payload.length === 0) return null;
   const point = payload[0]?.payload;
   if (!point) return null;
@@ -45,7 +45,10 @@ function ForecastTooltip({ active, payload, label, model }) {
       {model.methods
         .filter(
           (method) =>
-            method.available && point[method.key] !== null && point[method.key] !== undefined
+            method.available &&
+            (!leadingOnly || method.key === model.bestKey) &&
+            point[method.key] !== null &&
+            point[method.key] !== undefined
         )
         .map((method) => (
           <p
@@ -53,42 +56,49 @@ function ForecastTooltip({ active, payload, label, model }) {
             style={{ color: FORECAST_COLORS[method.key] }}
             className="mt-1 text-xs font-medium"
           >
-            {method.label}
-            {method.key === model.bestKey ? " (leading)" : ""}: {formatNumber(point[method.key])} kWh
+            {leadingOnly ? "Forecast" : method.label}
+            {!leadingOnly && method.key === model.bestKey ? " (leading)" : ""}:{" "}
+            {formatNumber(point[method.key])} kWh
           </p>
         ))}
     </div>
   );
 }
 
-export function ForecastLegend({ model, className = "" }) {
+export function ForecastLegend({ model, className = "", leadingOnly = false }) {
   const bridgeMonth = getBridgeMonth(model);
+
+  // On the Dashboard only the leading estimate is drawn, so naming three rival
+  // methods in the legend would label lines that are not on the chart.
+  const keys = leadingOnly
+    ? model.methods.filter((method) => method.key === model.bestKey)
+    : model.methods.filter((method) => method.available);
 
   return (
     <div className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 ${className}`}>
       <div className="flex items-center gap-1.5">
         <span className="h-2 w-2 rounded-full bg-emerald-600" />
-        <span className="text-[10px] font-medium text-slate-400">Actual</span>
+        <span className="text-[10px] font-medium text-slate-400">
+          {leadingOnly ? "Months already recorded" : "Actual"}
+        </span>
       </div>
-      {model.methods
-        .filter((method) => method.available)
-        .map((method) => {
-          const isBest = method.key === model.bestKey;
-          return (
-            <div key={method.key} className="flex items-center gap-1.5">
-              <span
-                className="block h-0 w-5"
-                style={{
-                  borderTop: `${isBest ? 2.5 : 2}px dashed ${FORECAST_COLORS[method.key]}`,
-                }}
-              />
-              <span className="text-[10px] font-medium text-slate-400">
-                {method.label}
-                {isBest ? " (leading)" : ""}
-              </span>
-            </div>
-          );
-        })}
+      {keys.map((method) => {
+        const isBest = method.key === model.bestKey;
+        return (
+          <div key={method.key} className="flex items-center gap-1.5">
+            <span
+              className="block h-0 w-5"
+              style={{
+                borderTop: `${isBest ? 2.5 : 2}px dashed ${FORECAST_COLORS[method.key]}`,
+              }}
+            />
+            <span className="text-[10px] font-medium text-slate-400">
+              {leadingOnly ? "Forecast" : method.label}
+              {!leadingOnly && isBest ? " (leading)" : ""}
+            </span>
+          </div>
+        );
+      })}
       {bridgeMonth && (
         <span className="ml-auto rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-600">
           Predicted from {bridgeMonth}
@@ -105,6 +115,9 @@ export default function ForecastChart({
   // would both paint with whichever <defs> the browser found first.
   gradientId = "forecastActualBar",
   angledLabels = true,
+  // The Dashboard answers "what is next month"; comparing the three estimates is
+  // the Analytics page's job. Three dashed lines in a 176px card is noise.
+  leadingOnly = false,
 }) {
   const bridgeMonth = getBridgeMonth(model);
   const tick = { fontSize: 10, fontWeight: 600, fill: "#94a3b8" };
@@ -137,7 +150,7 @@ export default function ForecastChart({
             width={48}
           />
           <Tooltip
-            content={<ForecastTooltip model={model} />}
+            content={<ForecastTooltip model={model} leadingOnly={leadingOnly} />}
             cursor={{ fill: "rgba(16,185,129,0.04)" }}
           />
           {bridgeMonth && (
@@ -158,7 +171,11 @@ export default function ForecastChart({
             animationEasing="ease-out"
           />
           {model.methods
-            .filter((method) => method.available)
+            .filter(
+              (method) =>
+                method.available &&
+                (!leadingOnly || method.key === model.bestKey)
+            )
             .map((method) => {
               const isBest = method.key === model.bestKey;
               const color = FORECAST_COLORS[method.key];

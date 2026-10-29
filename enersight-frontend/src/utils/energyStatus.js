@@ -15,8 +15,8 @@
 // standard. State them that way if asked, and cite a reference (ASHRAE 100, or the
 // Philippine Energy Efficiency Project benchmarks) if you later adopt one.
 
-export const EUI_CRITICAL_THRESHOLD = 20;
-export const EUI_HIGH_THRESHOLD = 10;
+export const EUI_CRITICAL_THRESHOLD = 250;
+export const EUI_HIGH_THRESHOLD = 150;
 
 // Below this many days an extrapolation to a full year is noise, not a signal.
 //

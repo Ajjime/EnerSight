@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -25,6 +24,8 @@ import PageHeader from "../components/PageHeader";
 import HeaderActionButton from "../components/HeaderActionButton";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
+import InfoHint from "../components/InfoHint";
+import EnergyHeatLayer from "../components/EnergyHeatLayer";
 import SkeletonRows from "../components/SkeletonRows";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 
@@ -40,6 +41,10 @@ import {
   getEnergyStatus,
 } from "../utils/energyStatus";
 const AUTO_REFRESH_MS = 30000;
+
+// Everything about one building (meters, readings, monthly trend, appliances).
+// Loaded on first open so the map page does not pay for it up front.
+const BuildingProfile = lazy(() => import("../components/BuildingProfile"));
 
 const DEFAULT_CENTER = [7.3019, 125.6852];
 const DEFAULT_ZOOM = 16;
@@ -425,7 +430,7 @@ function SelectedBuildingCard({ building, onClose, onViewDetails }) {
           className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-slate-950 px-3.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
         >
           <Eye size={14} />
-          View details
+          Full profile
         </button>
       </div>
     </div>
@@ -478,169 +483,6 @@ function ToastMessage({ toast, onClose }) {
   );
 }
 
-function BuildingDetailsModal({ building, onClose }) {
-  if (!building) {
-    return null;
-  }
-
-  const modalContent = (
-    <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/70 p-5">
-      <div className="relative z-[50001] flex max-h-[86vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-        <div className="shrink-0 border-b border-slate-100 bg-white p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-700">
-                GIS Building Details
-              </p>
-
-              <h2 className="mt-2 break-words text-2xl font-bold leading-tight text-slate-950">
-                {building.name}
-              </h2>
-
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Energy status and monitoring summary.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="shrink-0 rounded-2xl border border-slate-200 bg-white p-3 text-slate-500 transition hover:bg-slate-50 hover:text-red-600"
-            >
-              <X size={19} />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Energy Status
-              </p>
-
-              <span
-                className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(
-                  building.energy_status
-                )}`}
-              >
-                {building.energy_status}
-              </span>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                EUI
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {formatDecimal(building.eui)} kWh/m²
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Total Consumption
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {formatNumber(building.total_consumption)} kWh
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Floor Area
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {formatNumber(building.floor_area)} m²
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Latest Reading
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {formatNumber(building.latest_reading)} kWh
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Meters / Readings
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {building.meter_count} meters • {building.reading_count}{" "}
-                readings
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Building Type
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {building.building_type}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                EUI Calculation
-              </p>
-
-              <p className="mt-2 text-sm font-normal leading-6 text-slate-700">
-                {formatNumber(building.total_consumption)} kWh ÷{" "}
-                {formatNumber(building.floor_area)} m² ={" "}
-                {formatDecimal(building.eui)} kWh/m²
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Coordinates
-              </p>
-
-              <p className="mt-2 text-lg font-semibold text-slate-950">
-                {building.latitude}, {building.longitude}
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4 md:col-span-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                Recommendation
-              </p>
-
-              <p className="mt-2 text-sm font-normal leading-6 text-emerald-800">
-                {getRecommendation(building)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="shrink-0 border-t border-slate-100 bg-white p-6">
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  return createPortal(modalContent, document.body);
-}
-
 // Kept next to the real row's grid-cols-[...] class so the two stay in step.
 const MAP_ROW_COLUMNS = "1.2fr 0.9fr 0.9fr 1fr 0.9fr 1fr 0.9fr";
 
@@ -654,6 +496,10 @@ export default function BuildingMap() {
   // On a phone the card covers half the map, so it waits for a tap there.
   const [isCardOpen, setIsCardOpen] = useState(() => window.innerWidth >= 640);
   const [baseLayer, setBaseLayer] = useState("map");
+  // Off by default: the markers answer "which building", the heat layer
+  // answers "where is the load concentrated", and only one of those is the
+  // first question a reader has.
+  const [showHeat, setShowHeat] = useState(false);
   const [map, setMap] = useState(null);
   const [detailsBuilding, setDetailsBuilding] = useState(null);
   const [toast, setToast] = useState({
@@ -999,7 +845,7 @@ export default function BuildingMap() {
             </HeaderActionButton>
 
             <HeaderActionButton icon={Zap} variant="dark">
-              Avg EUI {formatDecimal(averageEui)}
+              Avg intensity {formatDecimal(averageEui)}
             </HeaderActionButton>
           </>
         }
@@ -1218,10 +1064,14 @@ export default function BuildingMap() {
             )}
           </div>
 
-          <p className="border-t border-slate-100 px-4 py-2.5 text-[11px] leading-4 text-slate-400">
-            Normal ≤ {EUI_HIGH_THRESHOLD} · High &gt; {EUI_HIGH_THRESHOLD} ·
-            Critical &gt; {EUI_CRITICAL_THRESHOLD} kWh/m²
-          </p>
+          <div className="flex items-start gap-1.5 border-t border-slate-100 px-4 py-2.5">
+            <p className="text-[11px] leading-4 text-slate-400">
+              Energy intensity per building: Normal ≤ {EUI_HIGH_THRESHOLD} ·
+              High &gt; {EUI_HIGH_THRESHOLD} · Critical &gt;{" "}
+              {EUI_CRITICAL_THRESHOLD} kWh/m² per year
+            </p>
+            <InfoHint term="euiStatus" align="right" />
+          </div>
         </aside>
 
         <div className="energy-map-shell h-[440px] sm:h-[520px] lg:h-full">
@@ -1241,6 +1091,8 @@ export default function BuildingMap() {
               maxNativeZoom={tileLayer.maxNativeZoom}
               className={tileLayer.className}
             />
+
+            {showHeat && <EnergyHeatLayer buildings={filteredBuildings} />}
 
             {filteredBuildings.map((building) => {
               const isSelected =
@@ -1277,10 +1129,11 @@ export default function BuildingMap() {
             })}
           </MapContainer>
 
+          <div className="absolute left-3 top-3 z-[1000] flex flex-wrap items-center gap-2">
           <div
             role="group"
             aria-label="Base map"
-            className="absolute left-3 top-3 z-[1000] inline-flex rounded-full border border-slate-200 bg-white/95 p-1 shadow-md backdrop-blur"
+            className="inline-flex rounded-full border border-slate-200 bg-white/95 p-1 shadow-md backdrop-blur"
           >
             {Object.entries(BASE_LAYERS).map(([key, layer]) => {
               const LayerIcon = layer.icon;
@@ -1303,6 +1156,35 @@ export default function BuildingMap() {
                 </button>
               );
             })}
+          </div>
+
+          <button
+            type="button"
+            aria-pressed={showHeat}
+            onClick={() => setShowHeat((current) => !current)}
+            className={`inline-flex h-10 items-center gap-1.5 rounded-full border px-3.5 text-xs font-semibold shadow-md backdrop-blur transition ${
+              showHeat
+                ? "border-amber-500 bg-amber-500 text-white"
+                : "border-slate-200 bg-white/95 text-slate-600 hover:bg-slate-100 hover:text-slate-950"
+            }`}
+          >
+            <Flame size={14} />
+            Heat map
+          </button>
+
+          {showHeat && (
+            <div className="inline-flex h-10 items-center gap-2 rounded-full border border-slate-200 bg-white/95 px-3.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-500 shadow-md backdrop-blur">
+              <span>Normal</span>
+              <span
+                aria-hidden="true"
+                className="block h-2 w-16 rounded-full"
+                style={{
+                  background: "linear-gradient(90deg, #059669 0%, #f59e0b 50%, #ef4444 100%)",
+                }}
+              />
+              <span>Critical</span>
+            </div>
+          )}
           </div>
 
           <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
@@ -1367,7 +1249,10 @@ export default function BuildingMap() {
               <div>Building</div>
               <div>Total kWh</div>
               <div>Floor Area</div>
-              <div>EUI</div>
+              <div className="flex items-center gap-1">
+                EUI
+                <InfoHint term="eui" />
+              </div>
               <div>Meters</div>
               <div>Coordinates</div>
               <div>Status</div>
@@ -1458,10 +1343,16 @@ export default function BuildingMap() {
         </div>
       </section>
 
-      <BuildingDetailsModal
-        building={detailsBuilding}
-        onClose={() => setDetailsBuilding(null)}
-      />
+      {detailsBuilding && (
+        <Suspense fallback={null}>
+          <BuildingProfile
+            key={detailsBuilding.building_id}
+            buildingId={detailsBuilding.building_id}
+            buildingName={detailsBuilding.name}
+            onClose={() => setDetailsBuilding(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

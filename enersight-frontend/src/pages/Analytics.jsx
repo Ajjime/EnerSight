@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { Suspense, lazy, useCallback, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   BarChart3,
   Building2,
+  ChevronRight,
   Coins,
   Download,
   Lightbulb,
@@ -48,6 +49,7 @@ import {
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 import { formatCompact, formatDecimal, formatNumber } from "../utils/format";
+import { APPLIANCE_GAP_TOLERANCE } from "../utils/buildingProfile";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import {
@@ -70,6 +72,7 @@ import {
 } from "../utils/readingQuality";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
+import InfoHint from "../components/InfoHint";
 import SkeletonRows from "../components/SkeletonRows";
 import ForecastChart, { ForecastLegend } from "../components/ForecastChart";
 import {
@@ -89,8 +92,12 @@ const statusOptions = ["All Status", "Normal", "High", "Critical", "No Data"];
 // readings, it means the floor area is missing, which is itself something to fix.
 const STATUS_RANK = { Critical: 0, High: 1, "No Data": 2, Normal: 3 };
 
-// Measured use within this fraction of the appliance estimate counts as agreeing.
-const APPLIANCE_GAP_TOLERANCE = 0.15;
+// Measured use within APPLIANCE_GAP_TOLERANCE of the appliance estimate counts as
+// agreeing. It lives in utils/buildingProfile.js so the building profile grades the
+// gap the same way.
+
+// Clicking a building opens everything about it. Loaded on first open.
+const BuildingProfile = lazy(() => import("../components/BuildingProfile"));
 
 const COMPARISON_METRICS = [
   { value: "kwh", label: "kWh" },
@@ -409,7 +416,7 @@ function ComparisonTooltip({ active, payload, label }) {
           <dd className="font-semibold text-slate-950">{formatNumber(row.totalConsumption)} kWh</dd>
         </div>
         <div className="flex justify-between gap-4">
-          <dt className="text-slate-500">EUI</dt>
+          <dt className="text-slate-500">Energy intensity</dt>
           <dd className="font-semibold text-slate-950">
             {row.status === "No Data" ? "—" : `${formatDecimal(row.eui, 1)} kWh/m²/yr`}
           </dd>
@@ -516,6 +523,9 @@ function SortHeader({ label, sortKey, sort, onSort }) {
 // Kept next to the real row's grid-cols-[...] class so the two stay in step.
 const ANALYTICS_ROW_COLUMNS = "1.4fr 0.6fr 0.7fr 0.95fr 0.95fr 0.75fr 0.9fr 0.75fr 0.8fr";
 
+// Mirrors the grid-cols-[...] on the back-test accuracy rows.
+const FORECAST_METRIC_COLUMNS = "1.8fr 1fr 1fr 1fr 1fr";
+
 const Analytics = () => {
   const [buildings, setBuildings] = useState([]);
   const [meters, setMeters] = useState([]);
@@ -532,6 +542,12 @@ const Analytics = () => {
   const [forecastHorizon, setForecastHorizon] = useState(3);
   const [comparisonMetric, setComparisonMetric] = useState("kwh");
   const [tableSort, setTableSort] = useState({ key: "totalConsumption", direction: "desc" });
+  const [profileBuilding, setProfileBuilding] = useState(null);
+
+  // Takes a building row ({ building_id, building, ... }).
+  function openBuildingProfile(row) {
+    setProfileBuilding({ building_id: row.building_id, name: row.building });
+  }
   const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
 
   const buildingsById = useMemo(
@@ -632,7 +648,8 @@ const Analytics = () => {
 
   const { lastUpdated, isAutoRefreshing } = useAutoRefresh(
     () => refreshData(),
-    { intervalMs: AUTO_REFRESH_MS }
+    // Paused while a building profile is open; the profile loads its own data.
+    { intervalMs: AUTO_REFRESH_MS, enabled: !profileBuilding }
   );
 
   // Rate loading moved to a shared hook so a failure is visible instead of
@@ -916,11 +933,25 @@ const Analytics = () => {
   // ── Forecast ──
   const bestMethod = forecastModel?.methods.find((m) => m.key === forecastModel.bestKey);
   const forecastPoints = forecastModel ? forecastModel.series.filter((d) => d.isForecast) : [];
+  // Level forecasts repeat one figure; only a method that varies by month
+  // earns a card per month.
+  const forecastLevels = forecastModel
+    ? forecastPoints.map((point) => point[forecastModel.bestKey])
+    : [];
+  const levelValue = forecastLevels[0] ?? 0;
+  const isLevelForecast =
+    forecastLevels.length > 1 &&
+    forecastLevels.every((value) => value === levelValue);
+  const otherMethodLevels = forecastModel
+    ? forecastModel.methods
+        .filter(
+          (entry) => entry.available && entry.key !== forecastModel.bestKey
+        )
+        .map((entry) => ({ label: entry.label, value: entry.projection[0] }))
+    : [];
   const forecastDirection = getForecastDirection(forecastModel).label;
   const ForecastIcon =
     forecastDirection === "Rising" ? TrendingUp : forecastDirection === "Falling" ? TrendingDown : Minus;
-  const trendFit = forecastModel?.trendFit ?? 0;
-  const trendFitLabel = trendFit >= 0.7 ? "strong" : trendFit >= 0.4 ? "moderate" : "weak";
 
   // ── Appliance comparison ──
   const hasApplianceData = applianceRows.some((row) => row.applianceKwhMonth !== null);
@@ -1091,7 +1122,8 @@ const Analytics = () => {
       {/* ── Stat Cards ── */}
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title="Total Consumption"
+          title="Total Energy Used"
+          hint="measuredVsEstimated"
           value={formatNumber(totalConsumption)}
           icon={Zap}
           tone="dark"
@@ -1108,6 +1140,7 @@ const Analytics = () => {
         />
         <StatCard
           title="Estimated Cost"
+          hint="ratePerKwh"
           value={formatPeso(totalCost, { decimals: 0 })}
           icon={Coins}
           tone="green"
@@ -1122,7 +1155,7 @@ const Analytics = () => {
           animDelay={60}
         />
         <StatCard
-          title="Highest Building"
+          title="Highest Usage Building"
           value={hasHighestBuilding ? highestBuilding.building : "N/A"}
           icon={TrendingUp}
           tone={highestBuilding?.status === "Critical" ? "red" : "amber"}
@@ -1135,7 +1168,8 @@ const Analytics = () => {
           animDelay={120}
         />
         <StatCard
-          title="Low OCR Accuracy"
+          title="Low-Confidence Photos"
+          hint="ocrAccuracy"
           value={formatNumber(lowAccuracyCount)}
           icon={AlertTriangle}
           tone={lowAccuracyCount > 0 ? "red" : "green"}
@@ -1428,9 +1462,21 @@ const Analytics = () => {
       >
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-              <ForecastIcon size={11} />
-              Forecast{forecastModel ? ` · ${forecastDirection}` : ""}
+            {/* Same reference point and the same colour rule as the Dashboard
+                card, so the two pages cannot describe one forecast differently. */}
+            <div
+              className={`mb-1.5 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                forecastDirection === "Rising"
+                  ? "border-red-100 bg-red-50 text-red-600"
+                  : forecastDirection === "Falling"
+                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                    : "border-slate-200 bg-slate-50 text-slate-500"
+              }`}
+            >
+              <ForecastIcon size={12} />
+              {forecastModel
+                ? `${forecastDirection} vs 6-month average`
+                : "Forecast"}
             </div>
             <h2 className="text-lg font-semibold text-slate-950">Energy Forecast</h2>
             <p className="text-xs font-normal text-slate-400">
@@ -1454,93 +1500,225 @@ const Analytics = () => {
           </div>
         ) : (
           <>
-            <div className="mb-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]">
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                  Leading estimate
-                </p>
-                <p className="mt-1 text-sm font-semibold text-slate-950">{bestMethod.label}</p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  {bestMethod.error !== null
-                    ? `Picked because it came closest in a back-test: forecasting the last ${forecastModel.testedMonths} month${forecastModel.testedMonths === 1 ? "" : "s"} from the months before them, it was off by ${formatPercent(bestMethod.error)} on average.`
-                    : "There is not enough history yet to test the estimates against real months, so the moving average leads by default."}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-1.5">
-                  {forecastModel.methods.map((method) => (
-                    <span
-                      key={method.key}
-                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                        method.key === forecastModel.bestKey
-                          ? "border-emerald-200 bg-white text-slate-800"
-                          : "border-slate-200 bg-white text-slate-500"
-                      }`}
-                    >
-                      <span className="h-2 w-2 rounded-full" style={{ background: FORECAST_COLORS[method.key] }} />
-                      {method.label}
-                      <span className="text-slate-400">
-                        {!method.available
-                          ? `needs ${method.minMonths}+ months`
-                          : method.error === null
-                          ? `needs ${method.minMonths + 1}+ months to test`
-                          : `off by ${formatPercent(method.error)}`}
-                      </span>
+            <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Leading estimate
+              </p>
+              <p className="mt-1 text-sm font-semibold text-slate-950">{bestMethod.label}</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">
+                {bestMethod.error !== null
+                  ? `Picked because it came closest in a back-test: forecasting the last ${forecastModel.testedMonths} month${forecastModel.testedMonths === 1 ? "" : "s"} from the months before them, it was off by ${formatPercent(bestMethod.error)} on average.`
+                  : "There is not enough history yet to test the estimates against real months, so the moving average leads by default."}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {forecastModel.methods.map((method) => (
+                  <span
+                    key={method.key}
+                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+                      method.key === forecastModel.bestKey
+                        ? "border-emerald-200 bg-white text-slate-800"
+                        : "border-slate-200 bg-white text-slate-500"
+                    }`}
+                  >
+                    <span className="h-2 w-2 rounded-full" style={{ background: FORECAST_COLORS[method.key] }} />
+                    {method.label}
+                    <span className="text-slate-400">
+                      {!method.available
+                        ? `needs ${method.minMonths}+ months`
+                        : method.error === null
+                        ? `needs ${method.minMonths + 1}+ months to test`
+                        : `off by ${formatPercent(method.error)}`}
                     </span>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-                  Trend line fit
-                </p>
-                <p className="mt-1 text-sm font-semibold text-slate-950">
-                  R² {formatDecimal(trendFit, 2)} · {trendFitLabel}
-                </p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  A straight line explains {formatPercent(trendFit)} of the month-to-month
-                  change.
-                  {trendFit < 0.4 && " Treat the linear trend as a rough direction, not a number."}
-                </p>
+                  </span>
+                ))}
               </div>
             </div>
 
-            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-              {forecastPoints.map((pt, idx) => (
-                <div
-                  key={pt.month}
-                  className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-slate-50 px-3 py-3"
-                  style={{ animation: `analyticsCardIn 350ms ease-out ${idx * 60}ms both` }}
-                >
-                  <p className="text-[10px] font-medium text-slate-400">{pt.month}</p>
-                  <p className="mt-1 text-lg font-bold tabular-nums text-slate-950">
-                    {formatNumber(pt[forecastModel.bestKey])}
-                    <span className="ml-1 text-[10px] font-normal text-slate-400">kWh</span>
-                  </p>
-                  <p className="text-xs font-semibold text-emerald-700">
-                    {formatPeso(pt[forecastModel.bestKey] * rate, { decimals: 0 })}
-                  </p>
-                  <div className="mt-2 space-y-0.5">
-                    {forecastModel.methods
-                      .filter((method) => method.available && method.key !== forecastModel.bestKey)
-                      .map((method) => (
-                        <div key={method.key} className="flex items-center justify-between gap-1 text-[10px]">
-                          <span className="truncate text-slate-400">{method.label}</span>
-                          <span className="font-medium tabular-nums text-slate-500">{formatNumber(pt[method.key])}</span>
-                        </div>
-                      ))}
+            {/* The comparison the study is built on: every estimator scored on the
+                same held-out months, so the ranking is checkable rather than asserted. */}
+            {/* Open by default. This comparison IS Objective 2 - "test and compare
+                MA, WMA and SES" - so it has to be visible without hunting for it.
+                Folding it away made the page simpler and hid the study's central
+                result from exactly the people assessing it. */}
+            <details open className="group mb-4 overflow-hidden rounded-2xl border border-slate-100">
+              <summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-3 marker:content-none">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <ChevronRight
+                    size={14}
+                    className="shrink-0 text-slate-400 transition group-open:rotate-90"
+                  />
+                  <span className="text-sm font-semibold text-slate-700">
+                    Comparing the three forecasting methods
+                  </span>
+                  <InfoHint term="backTest" />
+                </span>
+
+                <span className="text-xs font-normal text-slate-400">
+                  {forecastModel.testedMonths > 0
+                    ? `Tested on ${forecastModel.testedMonths} real month${forecastModel.testedMonths === 1 ? "" : "s"}`
+                    : "Not enough history to test yet"}
+                </span>
+              </summary>
+
+              <div
+                className="grid grid-cols-[1.8fr_repeat(4,1fr)] gap-2 border-b border-slate-100 px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.1em] text-slate-400"
+                style={{ gridTemplateColumns: FORECAST_METRIC_COLUMNS }}
+              >
+                <span>Method</span>
+                <span className="flex items-center justify-end gap-1">
+                  MAE kWh
+                  <InfoHint term="mae" align="right" />
+                </span>
+                <span className="flex items-center justify-end gap-1">
+                  RMSE kWh
+                  <InfoHint term="rmse" align="right" />
+                </span>
+                <span className="flex items-center justify-end gap-1">
+                  MAPE
+                  <InfoHint term="mape" align="right" />
+                </span>
+                <span className="flex items-center justify-end gap-1">
+                  R²
+                  <InfoHint term="r2" align="right" />
+                </span>
+              </div>
+
+              {forecastModel.methods.map((method) => {
+                const isBest = method.key === forecastModel.bestKey;
+                const metrics = method.metrics;
+
+                return (
+                  <div
+                    key={method.key}
+                    className={`grid grid-cols-[1.8fr_repeat(4,1fr)] items-center gap-2 px-4 py-2.5 text-xs ${
+                      isBest ? "bg-emerald-50/60" : "bg-white"
+                    }`}
+                    style={{ gridTemplateColumns: FORECAST_METRIC_COLUMNS }}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: FORECAST_COLORS[method.key] }}
+                      />
+                      <span className="truncate font-medium text-slate-700">{method.label}</span>
+                      {isBest && (
+                        <span className="shrink-0 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[9px] font-semibold text-white">
+                          best
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-right tabular-nums text-slate-600">
+                      {metrics ? formatNumber(metrics.mae) : "—"}
+                    </span>
+                    <span className="text-right tabular-nums text-slate-600">
+                      {metrics ? formatNumber(metrics.rmse) : "—"}
+                    </span>
+                    <span className="text-right tabular-nums text-slate-600">
+                      {metrics && metrics.mape !== null ? formatPercent(metrics.mape) : "—"}
+                    </span>
+                    <span className="text-right tabular-nums text-slate-600">
+                      {metrics && metrics.r2 !== null ? formatDecimal(metrics.r2, 2) : "—"}
+                    </span>
                   </div>
+                );
+              })}
+
+              <p className="border-t border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-normal leading-5 text-slate-500">
+                Each method predicted months that had already happened, using only the
+                months before them. Lower is better for the first three columns; higher
+                is better for the fit score. Hover any column heading for what it means.
+              </p>
+            </details>
+            {/* All three estimators project a level, so every month of the horizon
+                carries the identical figure. Rendered as one card per month that
+                reads correct output as a rendering fault, so a level forecast is
+                stated once. Per-month cards return the moment a method that varies
+                by month leads. */}
+            {isLevelForecast ? (
+              <div className="mb-4 rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-slate-50 p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                  Next {forecastPoints.length} month
+                  {forecastPoints.length === 1 ? "" : "s"} · {forecastPoints[0].month} to{" "}
+                  {forecastPoints[forecastPoints.length - 1].month}
+                </p>
+
+                <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1">
+                  <p className="text-2xl font-semibold leading-none tracking-tight text-slate-950">
+                    {formatNumber(levelValue)}
+                    <span className="ml-1.5 text-xs font-medium text-slate-400">
+                      kWh per month
+                    </span>
+                  </p>
+
+                  <p className="text-sm font-semibold text-emerald-700">
+                    {formatPeso(levelValue * rate, { decimals: 0 })} per month
+                  </p>
                 </div>
-              ))}
-            </div>
+
+                <p className="mt-1.5 text-xs font-normal text-slate-500">
+                  {formatNumber(levelValue * forecastPoints.length)} kWh over the
+                  period · about{" "}
+                  {formatPeso(levelValue * forecastPoints.length * rate, { decimals: 0 })}{" "}
+                  in total
+                </p>
+
+                <p className="mt-3 flex items-start gap-1.5 border-t border-emerald-100 pt-3 text-xs font-normal leading-5 text-slate-500">
+                  <span>
+                    Every month carries the same figure because these methods
+                    estimate a level, not a direction. Read it as consumption
+                    holding around here.
+                  </span>
+                  <InfoHint term="levelForecast" align="right" />
+                </p>
+
+                {otherMethodLevels.length > 0 && (
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">
+                    {otherMethodLevels
+                      .map((method) => `${method.label}: ${formatNumber(method.value)}`)
+                      .join(" · ")}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                {forecastPoints.map((pt, idx) => (
+                  <div
+                    key={pt.month}
+                    className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-slate-50 px-3 py-3"
+                    style={{ animation: `analyticsCardIn 350ms ease-out ${idx * 60}ms both` }}
+                  >
+                    <p className="text-[10px] font-medium text-slate-400">{pt.month}</p>
+                    <p className="mt-1 text-lg font-bold tabular-nums text-slate-950">
+                      {formatNumber(pt[forecastModel.bestKey])}
+                      <span className="ml-1 text-[10px] font-normal text-slate-400">kWh</span>
+                    </p>
+                    <p className="text-xs font-semibold text-emerald-700">
+                      {formatPeso(pt[forecastModel.bestKey] * rate, { decimals: 0 })}
+                    </p>
+                    <div className="mt-2 space-y-0.5">
+                      {forecastModel.methods
+                        .filter((method) => method.available && method.key !== forecastModel.bestKey)
+                        .map((method) => (
+                          <div key={method.key} className="flex items-center justify-between gap-1 text-[10px]">
+                            <span className="truncate text-slate-400">{method.label}</span>
+                            <span className="font-medium tabular-nums text-slate-500">{formatNumber(pt[method.key])}</span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <ForecastLegend model={forecastModel} className="mb-3" />
 
             <ForecastChart model={forecastModel} className="h-56" gradientId="analyticsForecastBar" />
 
             <p className="mt-3 text-[10px] font-normal leading-4 text-slate-400">
-              Moving average: mean of the last 3 months. Linear trend: a straight line
-              through every month. Same month last year: last year&apos;s figure for that
-              month, scaled by how recent months compare with a year earlier. Costs use{" "}
-              {formatPeso(rate)} per kWh.
+              Moving average: mean of the last 3 months. Weighted moving average: the same
+              3 months, with the newest weighted heaviest. Simple exponential smoothing:
+              every past month folded into one level, recent months counting for more.
+              Costs use {formatPeso(rate)} per kWh.
             </p>
           </>
         )}
@@ -1579,7 +1757,13 @@ const Analytics = () => {
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-slate-950">{row.building}</p>
+                    <button
+                      type="button"
+                      onClick={() => openBuildingProfile(row)}
+                      className="block max-w-full truncate text-left font-semibold text-slate-950 hover:text-emerald-700 hover:underline"
+                    >
+                      {row.building}
+                    </button>
                     <p className="mt-0.5 text-xs font-normal text-slate-400">
                       EUI {formatEui(row)}
                       {row.status !== "No Data" && " kWh/m²/yr"} · {formatNumber(row.totalConsumption)} kWh ·{" "}
@@ -1680,7 +1864,7 @@ const Analytics = () => {
             <h2 className="text-lg font-semibold text-slate-950">Building Analytics Table</h2>
             <p className="mt-0.5 text-xs font-normal text-slate-400">
               Consumption, energy intensity, OCR accuracy, and verification. Click a column
-              to sort.
+              to sort, or a building for its full profile.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1708,7 +1892,10 @@ const Analytics = () => {
               <div><SortHeader label="Readings" sortKey="readingCount" sort={tableSort} onSort={handleSort} /></div>
               <div><SortHeader label="Total" sortKey="totalConsumption" sort={tableSort} onSort={handleSort} /></div>
               <div><SortHeader label="Per Month" sortKey="monthlyConsumption" sort={tableSort} onSort={handleSort} /></div>
-              <div><SortHeader label="EUI" sortKey="eui" sort={tableSort} onSort={handleSort} /></div>
+              <div className="flex items-center gap-1">
+                <SortHeader label="EUI" sortKey="eui" sort={tableSort} onSort={handleSort} />
+                <InfoHint term="eui" />
+              </div>
               <div><SortHeader label="Est. Cost" sortKey="estimatedCost" sort={tableSort} onSort={handleSort} /></div>
               <div><SortHeader label="OCR Avg." sortKey="averageAccuracy" sort={tableSort} onSort={handleSort} /></div>
               <div><SortHeader label="Status" sortKey="status" sort={tableSort} onSort={handleSort} /></div>
@@ -1728,10 +1915,20 @@ const Analytics = () => {
                 {sortedTableRows.map((row) => (
                   <div
                     key={row.building_id}
-                    className="grid grid-cols-[1.4fr_0.6fr_0.7fr_0.95fr_0.95fr_0.75fr_0.9fr_0.75fr_0.8fr] items-center px-4 py-4 text-sm transition hover:bg-slate-50/60"
+                    onClick={() => openBuildingProfile(row)}
+                    className="grid cursor-pointer grid-cols-[1.4fr_0.6fr_0.7fr_0.95fr_0.95fr_0.75fr_0.9fr_0.75fr_0.8fr] items-center px-4 py-4 text-sm transition hover:bg-emerald-50/40"
                   >
                     <div>
-                      <p className="font-semibold text-slate-950">{row.building}</p>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openBuildingProfile(row);
+                        }}
+                        className="text-left font-semibold text-slate-950 hover:text-emerald-700 hover:underline"
+                      >
+                        {row.building}
+                      </button>
                       <p className="mt-0.5 text-[11px] font-normal text-slate-400">
                         {row.verifiedCount} verified · {row.pendingCount} review
                         {row.manualCount > 0 && ` · ${row.manualCount} manual`}
@@ -1779,6 +1976,17 @@ const Analytics = () => {
           an average month.
         </p>
       </section>
+
+      {profileBuilding && (
+        <Suspense fallback={null}>
+          <BuildingProfile
+            key={profileBuilding.building_id}
+            buildingId={profileBuilding.building_id}
+            buildingName={profileBuilding.name}
+            onClose={() => setProfileBuilding(null)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

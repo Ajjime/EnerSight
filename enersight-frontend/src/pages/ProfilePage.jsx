@@ -14,6 +14,7 @@ import PageHeader from "../components/PageHeader";
 import ConfirmationModal from "../components/ConfirmationModal";
 import StatCard from "../components/StatCard";
 import { clearSavedLogin } from "../utils/session";
+import { getRoleLabel } from "../utils/roles";
 
 const roleAccess = {
   Admin: [
@@ -176,7 +177,7 @@ const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
 
         <StatCard
           title="Role"
-          value={currentRole}
+          value={getRoleLabel(currentRole)}
           description="Assigned system access level"
           icon={ShieldCheck}
           tone={

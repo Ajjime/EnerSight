@@ -73,13 +73,13 @@ import { FormField } from "../../components/ui/EnergyUI";
 const roleOptions = [
   {
     value: "Manager",
-    label: "Manager",
+    label: "Campus Administrator",
     description: "Can view reports, analytics, dashboard, and GIS map.",
     icon: BarChart3,
   },
   {
     value: "Staff",
-    label: "Staff",
+    label: "Facilities Staff",
     description: "Can add meter readings and view basic records.",
     icon: ScanLine,
   },

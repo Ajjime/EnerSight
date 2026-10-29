@@ -27,6 +27,12 @@ import ToastMessage from "../components/ToastMessage";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
+import {
+  ROLE_DESCRIPTIONS,
+  ROLE_ORDER,
+  getRoleLabel,
+  getShortRoleLabel,
+} from "../utils/roles";
 const AUTO_REFRESH_MS = 60000;
 
 // No email field: the User model has no email column (see models.py), so anything
@@ -39,7 +45,7 @@ const emptyForm = {
   status: "Active",
 };
 
-const roleOptions = ["Admin", "Manager", "Staff"];
+const roleOptions = ROLE_ORDER;
 // "Rejected" is reachable now that Reject marks the account instead of deleting it,
 // so it belongs in the filter and the editor. Mirrors VALID_STATUSES in users.py.
 const statusOptions = ["Active", "Inactive", "Pending", "Rejected"];
@@ -194,7 +200,7 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
               >
                 {roleOptions.map((role) => (
                   <option key={role} value={role}>
-                    {role}
+                    {getRoleLabel(role)}
                   </option>
                 ))}
               </select>
@@ -221,8 +227,9 @@ function UserModal({ modal, form, setForm, onClose, onSave, isSaving }) {
           <div className="mt-6 rounded-2xl border border-emerald-100 bg-emerald-50 p-5">
             <p className="text-sm font-semibold text-emerald-800">Role Guide</p>
             <p className="mt-1 text-sm font-normal leading-6 text-emerald-700">
-              Admin manages users and settings. Manager reviews reports and analytics.
-              Staff handles readings and records.
+              {ROLE_ORDER.map(
+                (role) => `${getRoleLabel(role)}: ${ROLE_DESCRIPTIONS[role]}`
+              ).join(" ")}
             </p>
           </div>
         </div>
@@ -445,7 +452,9 @@ const AdminUsers = () => {
         const changes = [];
 
         if (roleChanged) {
-          changes.push(`role from ${modal.originalRole} to ${form.role}`);
+          changes.push(
+            `role from ${getRoleLabel(modal.originalRole)} to ${getRoleLabel(form.role)}`
+          );
         }
 
         if (statusChanged) {
@@ -859,7 +868,7 @@ const AdminUsers = () => {
                           user.role
                         )}`}
                       >
-                        {user.role}
+                        {getShortRoleLabel(user.role)}
                       </span>
                     </div>
 
@@ -919,7 +928,7 @@ const AdminUsers = () => {
               <option value="All Roles">All Roles</option>
               {roleOptions.map((role) => (
                 <option key={role} value={role}>
-                  {role}
+                  {getRoleLabel(role)}
                 </option>
               ))}
             </select>
@@ -1009,7 +1018,7 @@ const AdminUsers = () => {
                           user.role
                         )}`}
                       >
-                        {user.role}
+                        {getShortRoleLabel(user.role)}
                       </span>
                     </div>
 

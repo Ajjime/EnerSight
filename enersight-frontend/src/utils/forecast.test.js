@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   MIN_MONTHS_FOR_FORECAST,
-  MIN_MONTHS_FOR_SEASONAL,
   MONTH_LABELS,
+  SES_ALPHA,
   buildForecastModel,
-  computeLinearFitQuality,
-  computeLinearForecast,
+  computeExponentialSmoothingForecast,
   computeMovingAvgForecast,
-  computeSeasonalForecast,
+  computeWeightedMovingAvgForecast,
   fillMonthGaps,
   getForecastDirection,
+  getHoldoutMonths,
   getNextMonthLabels,
   getNextMonthLabelsFromKey,
 } from "./forecast";
@@ -33,16 +33,6 @@ function monthlyPoints(startKey, values) {
 
 const labelsFromKey = (lastPoint, count) =>
   getNextMonthLabelsFromKey(lastPoint.sortKey, count);
-
-/** Hot-season demand peaking around April, with slight growth. */
-function seasonalValues(count) {
-  return Array.from({ length: count }, (_, index) => {
-    const month = (7 + index) % 12;
-    return Math.round(
-      1000 * (1 + 0.3 * Math.sin((month / 12) * 2 * Math.PI)) * (1 + 0.01 * index)
-    );
-  });
-}
 
 const method = (model, key) => model.methods.find((entry) => entry.key === key);
 
@@ -82,38 +72,48 @@ describe("computeMovingAvgForecast", () => {
   });
 });
 
-describe("computeLinearForecast", () => {
-  it("extends a straight line", () => {
-    expect(computeLinearForecast([100, 200, 300], 3)).toEqual([400, 500, 600]);
-    expect(computeLinearForecast([100, 100, 100], 2)).toEqual([100, 100]);
+describe("computeWeightedMovingAvgForecast", () => {
+  it("weights the newest month heaviest", () => {
+    // (200x1 + 300x2 + 400x3) / 6 = 333, above the plain mean of 300.
+    expect(computeWeightedMovingAvgForecast([100, 200, 300, 400], 3, 2)).toEqual([333, 333]);
   });
 
-  it("never forecasts negative usage", () => {
-    expect(computeLinearForecast([300, 200, 100], 2)).toEqual([0, 0]);
+  it("shrinks the window to the history available", () => {
+    // (100x1 + 200x2) / 3 = 167.
+    expect(computeWeightedMovingAvgForecast([100, 200], 3, 1)).toEqual([167]);
+    expect(computeWeightedMovingAvgForecast([250], 3, 1)).toEqual([250]);
   });
 
-  it("counts a gap month as a real zero, not a missing point", () => {
-    // Dropping the zero would fit 100 -> 300 as adjacent months and forecast 500.
-    expect(computeLinearForecast([100, 0, 300], 1)).toEqual([333]);
+  it("matches the moving average on a flat series", () => {
+    expect(computeWeightedMovingAvgForecast([100, 100, 100], 3, 1)).toEqual([100]);
   });
 
-  it("handles too little history", () => {
-    expect(computeLinearForecast([], 2)).toEqual([0, 0]);
-    expect(computeLinearForecast([5], 3)).toEqual([5, 5, 5]);
+  it("is zero with no history", () => {
+    expect(computeWeightedMovingAvgForecast([], 3, 2)).toEqual([0, 0]);
   });
 });
 
-describe("computeLinearFitQuality", () => {
-  it("is 1 for a perfect line and 0 for a flat or tiny series", () => {
-    expect(computeLinearFitQuality([100, 200, 300, 400])).toBeCloseTo(1);
-    expect(computeLinearFitQuality([100, 100, 100])).toBe(0);
-    expect(computeLinearFitQuality([100, 200])).toBe(0);
+describe("computeExponentialSmoothingForecast", () => {
+  it("carries the smoothed level forward flat", () => {
+    expect(SES_ALPHA).toBe(0.3);
+    // 100 -> 130 -> 181 at alpha 0.3.
+    expect(computeExponentialSmoothingForecast([100, 200, 300], 2)).toEqual([181, 181]);
   });
 
-  it("falls between 0 and 1 for noisy data", () => {
-    const fit = computeLinearFitQuality([100, 300, 150, 400, 200]);
-    expect(fit).toBeGreaterThan(0);
-    expect(fit).toBeLessThan(1);
+  it("sits on a flat series and follows a single point", () => {
+    expect(computeExponentialSmoothingForecast([100, 100, 100], 1)).toEqual([100]);
+    expect(computeExponentialSmoothingForecast([5], 3)).toEqual([5, 5, 5]);
+  });
+
+  it("reacts faster at a higher alpha", () => {
+    const slow = computeExponentialSmoothingForecast([100, 200, 300], 1, 0.2)[0];
+    const fast = computeExponentialSmoothingForecast([100, 200, 300], 1, 0.8)[0];
+
+    expect(fast).toBeGreaterThan(slow);
+  });
+
+  it("is zero with no history", () => {
+    expect(computeExponentialSmoothingForecast([], 2)).toEqual([0, 0]);
   });
 });
 
@@ -131,26 +131,20 @@ describe("month labels", () => {
   });
 });
 
-describe("computeSeasonalForecast", () => {
-  const firstYear = Array.from({ length: 12 }, (_, index) => (index + 1) * 100);
-
-  it("needs a full year", () => {
-    expect(MIN_MONTHS_FOR_SEASONAL).toBe(12);
-    expect(computeSeasonalForecast(firstYear.slice(0, 11), 3)).toBeNull();
+describe("getHoldoutMonths", () => {
+  it("holds out about 30% of the months", () => {
+    expect(getHoldoutMonths(12)).toBe(4);
+    expect(getHoldoutMonths(24)).toBe(7);
   });
 
-  it("repeats last year's months when there is nothing newer to compare", () => {
-    expect(computeSeasonalForecast(firstYear, 3)).toEqual([100, 200, 300]);
+  it("never leaves training below the minimum sample", () => {
+    expect(getHoldoutMonths(4)).toBe(1);
+    expect(getHoldoutMonths(5)).toBe(2);
   });
 
-  it("scales by how recent months compare with a year earlier", () => {
-    // Months 13-15 run 10% above months 1-3, so months 16-18 are 10% above 4-6.
-    expect(computeSeasonalForecast([...firstYear, 110, 220, 330], 3)).toEqual([440, 550, 660]);
-  });
-
-  it("caps the growth so one odd stretch cannot run away", () => {
-    // 2.2x is clamped to 2x.
-    expect(computeSeasonalForecast([...firstYear, 220, 440, 660], 3)).toEqual([800, 1000, 1200]);
+  it("is zero when nothing can be held back", () => {
+    expect(getHoldoutMonths(3)).toBe(0);
+    expect(getHoldoutMonths(0)).toBe(0);
   });
 });
 
@@ -162,62 +156,61 @@ describe("buildForecastModel", () => {
     expect(buildForecastModel(monthlyPoints("2026-01", [100, 0, 200]), 3, labelsFromKey)).toBeNull();
   });
 
+  it("carries exactly the three estimators the study compares", () => {
+    const model = buildForecastModel(monthlyPoints("2026-01", [100, 200, 300, 400]), 2, labelsFromKey);
+
+    expect(model.methods.map((entry) => entry.key)).toEqual(["average", "wma", "ses"]);
+    expect(model.methods.every((entry) => entry.available)).toBe(true);
+  });
+
   it("leads with the moving average when nothing can be tested yet", () => {
     const model = buildForecastModel(monthlyPoints("2026-01", [100, 200, 300]), 2, labelsFromKey);
 
     expect(model.testedMonths).toBe(0);
     expect(model.bestKey).toBe("average");
     expect(model.methods.every((entry) => entry.error === null)).toBe(true);
-    expect(method(model, "seasonal").available).toBe(false);
-    expect(method(model, "seasonal").projection).toBeNull();
+    expect(model.methods.every((entry) => entry.metrics === null)).toBe(true);
   });
 
-  it("leads with whichever estimate was closest on recent months", () => {
+  it("leads with whichever estimate was closest on the held-out months", () => {
+    // Training [100,200,300,400], tested on [500,600]: the weighted average
+    // leans on the newest months, so it trails the climb least.
     const model = buildForecastModel(
       monthlyPoints("2026-01", [100, 200, 300, 400, 500, 600]),
       3,
       labelsFromKey
     );
 
-    expect(model.testedMonths).toBe(3);
-    expect(model.bestKey).toBe("trend");
-    expect(method(model, "trend").error).toBeCloseTo(0);
-    expect(method(model, "average").error).toBeGreaterThan(0.5);
+    expect(model.testedMonths).toBe(2);
+    expect(model.bestKey).toBe("wma");
+    expect(method(model, "wma").error).toBeLessThan(method(model, "average").error);
+    expect(method(model, "average").error).toBeLessThan(method(model, "ses").error);
   });
 
-  it("skips zero months when scoring an estimate", () => {
+  it("reports MAE, RMSE, MAPE and R2 for every tested estimate", () => {
+    // Training [100,200,300] -> moving average 200, tested against [0,500].
     const model = buildForecastModel(
       monthlyPoints("2026-01", [100, 200, 300, 0, 500]),
       1,
       labelsFromKey
     );
+    const metrics = method(model, "average").metrics;
 
-    // Tested on [0, 500]; only the 500 month counts.
     expect(model.testedMonths).toBe(2);
-    expect(method(model, "trend").error).toBeCloseTo(0);
-    expect(method(model, "average").error).toBeCloseTo(0.6);
+    expect(metrics.mae).toBeCloseTo(250);
+    expect(metrics.rmse).toBeCloseTo(Math.sqrt(65000));
+    // Only the 500 month counts towards MAPE; there is no percentage against 0.
+    expect(metrics.mape).toBeCloseTo(0.6);
+    expect(metrics.r2).toBeCloseTo(-0.04);
+    expect(method(model, "average").error).toBe(metrics.mape);
   });
 
-  it("draws the seasonal estimate at 12 months but only ranks it from 13", () => {
-    const twelve = buildForecastModel(monthlyPoints("2025-08", seasonalValues(12)), 3, labelsFromKey);
-    expect(method(twelve, "seasonal").available).toBe(true);
-    expect(method(twelve, "seasonal").error).toBeNull();
-    expect(twelve.testedMonths).toBe(3);
-    expect(["average", "trend"]).toContain(twelve.bestKey);
+  it("leaves R2 null when a single held-out month has no spread to explain", () => {
+    const model = buildForecastModel(monthlyPoints("2026-01", [100, 200, 300, 400]), 1, labelsFromKey);
 
-    const thirteen = buildForecastModel(monthlyPoints("2025-08", seasonalValues(13)), 3, labelsFromKey);
-    expect(thirteen.testedMonths).toBe(1);
-    expect(thirteen.methods.every((entry) => entry.error !== null)).toBe(true);
-  });
-
-  it("prefers the seasonal estimate on seasonal data", () => {
-    const model = buildForecastModel(monthlyPoints("2025-08", seasonalValues(15)), 3, labelsFromKey);
-    const seasonalError = method(model, "seasonal").error;
-
-    expect(model.testedMonths).toBe(3);
-    expect(model.bestKey).toBe("seasonal");
-    expect(seasonalError).toBeLessThan(method(model, "average").error);
-    expect(seasonalError).toBeLessThan(method(model, "trend").error);
+    expect(model.testedMonths).toBe(1);
+    expect(method(model, "average").metrics.r2).toBeNull();
+    expect(method(model, "average").metrics.mae).toBeGreaterThan(0);
   });
 
   it("builds a chart series that bridges the last real month into the forecast", () => {
@@ -227,14 +220,12 @@ describe("buildForecastModel", () => {
 
     expect(model.series).toHaveLength(7);
     expect(lastActual).toMatchObject({ isForecast: false, actual: 400 });
-    expect(lastActual.trend).toBe(method(model, "trend").projection[0]);
-    expect(lastActual.seasonal).toBeNull();
-    expect(model.series.slice(0, 3).every((row) => row.trend === null)).toBe(true);
+    expect(lastActual.wma).toBe(method(model, "wma").projection[0]);
+    expect(lastActual.ses).toBe(method(model, "ses").projection[0]);
+    expect(model.series.slice(0, 3).every((row) => row.wma === null)).toBe(true);
     expect(upcoming.map((row) => row.month)).toEqual(["May 2026", "Jun 2026", "Jul 2026"]);
     expect(upcoming.every((row) => row.isForecast && row.actual === null)).toBe(true);
-    expect(model.recentAverage).toBe(300);
-    expect(model.trendFit).toBeGreaterThanOrEqual(0);
-    expect(model.trendFit).toBeLessThanOrEqual(1);
+    expect(model.baselineAverage).toBe(250);
   });
 
   it("keeps a month with no readings on the chart as a flagged zero", () => {
@@ -254,7 +245,7 @@ describe("getForecastDirection", () => {
     expect(getForecastDirection(null)).toEqual({ label: "Steady", change: 0 });
   });
 
-  it("follows the leading estimate against the last three real months", () => {
+  it("compares the leading estimate against six months, not three", () => {
     const rising = buildForecastModel(monthlyPoints("2026-01", [100, 200, 300, 400, 500, 600]), 3, labelsFromKey);
     const falling = buildForecastModel(monthlyPoints("2026-01", [600, 500, 400, 300, 200, 100]), 3, labelsFromKey);
     const flat = buildForecastModel(monthlyPoints("2026-01", [100, 100, 100, 100]), 3, labelsFromKey);
@@ -264,5 +255,25 @@ describe("getForecastDirection", () => {
     // A tie between estimates goes to the moving average, listed first.
     expect(flat.bestKey).toBe("average");
     expect(getForecastDirection(flat)).toEqual({ label: "Steady", change: 0 });
+  });
+
+  it("measures against six months, so a moving average can still show a trend", () => {
+    // The regression this guards: the moving average IS the mean of the last
+    // three months. Compared against a three-month baseline its change was
+    // exactly zero, so the indicator read "Steady" however consumption moved.
+    const falling = buildForecastModel(
+      monthlyPoints("2026-01", [180000, 183000, 181000, 171000, 161000, 151000]),
+      3,
+      labelsFromKey
+    );
+
+    // Six-month mean, not the 161,000 the last three months average to.
+    expect(falling.baselineAverage).toBeCloseTo(171166.67, 1);
+
+    const movingAverage = method(falling, "average").projection[0];
+    const change = (movingAverage - falling.baselineAverage) / falling.baselineAverage;
+
+    expect(change).toBeLessThan(-0.03);
+    expect(getForecastDirection(falling).label).toBe("Falling");
   });
 });

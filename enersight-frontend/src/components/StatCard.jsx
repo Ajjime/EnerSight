@@ -1,5 +1,7 @@
 import React from "react";
 
+import InfoHint from "./InfoHint";
+
 // One stat card for the whole app. Dashboard, Analytics, BuildingMap and
 // ProfilePage each used to carry a near-identical private copy; they differed
 // only in prop names, so both spellings are accepted here:
@@ -55,6 +57,9 @@ export default function StatCard({
   // Free-text values (a building or account name) wrap and need a smaller
   // size than a formatted number does.
   compactValue = false,
+  // A key from utils/glossary.js. Renders the "what is this?" control beside the
+  // title, so a figure never sits on the page as an unexplained word.
+  hint = null,
   // Opt-in stagger. The `analyticsCardIn` keyframe is declared in Analytics.jsx's
   // inline <style>, so only that page should pass this until it moves to index.css.
   animDelay = null,
@@ -75,7 +80,10 @@ export default function StatCard({
     >
       <div className="mb-4 flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <p className={`text-sm font-semibold ${palette.label}`}>{title}</p>
+          <p className={`flex items-center gap-1.5 text-sm font-semibold ${palette.label}`}>
+            {title}
+            {hint && <InfoHint term={hint} />}
+          </p>
 
           <p
             className={`mt-2 break-words font-bold leading-tight ${palette.value} ${

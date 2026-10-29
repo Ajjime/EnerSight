@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { Suspense, lazy, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -18,6 +18,17 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  CartesianGrid,
+  LabelList,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import PageHeader from "../components/PageHeader";
 import MiniEnergyMap from "../components/MiniEnergyMap";
@@ -50,7 +61,12 @@ import {
 } from "../utils/readingQuality";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
+import InfoHint from "../components/InfoHint";
 import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
+
+// Opened by clicking a building in the EUI ranking or a pin on the map preview.
+const BuildingProfile = lazy(() => import("../components/BuildingProfile"));
+
 const AUTO_REFRESH_MS = 30000;
 
 function normalizeBuilding(building) {
@@ -217,9 +233,6 @@ function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
   const direction = getForecastDirection(model).label;
   const DirectionIcon =
     direction === "Rising" ? TrendingUp : direction === "Falling" ? TrendingDown : Minus;
-  const otherMethods = model
-    ? model.methods.filter((method) => method.available && method.key !== model.bestKey)
-    : [];
 
   return (
     <div
@@ -232,14 +245,28 @@ function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
     >
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-            <DirectionIcon size={11} />
-            Forecast{model ? ` · ${direction}` : ""}
-          </div>
+          {model && (
+            /* Carries its own reference point. Beside it sits a delta measured
+               against last month alone, and the two can legitimately disagree -
+               the forecast can be above August and still below the half-year
+               average. Unlabelled, that read as the card contradicting itself.
+               Toned by direction too: rising consumption is the bad one, and it
+               used to be painted emerald whichever way it pointed. */
+            <div
+              className={`mb-1.5 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                direction === "Rising"
+                  ? "border-red-100 bg-red-50 text-red-600"
+                  : direction === "Falling"
+                    ? "border-emerald-100 bg-emerald-50 text-emerald-700"
+                    : "border-slate-200 bg-slate-50 text-slate-500"
+              }`}
+            >
+              <DirectionIcon size={12} />
+              {direction} vs 6-month average
+            </div>
+          )}
+
           <h2 className="text-base font-semibold text-slate-950">Energy Forecast</h2>
-          <p className="text-xs font-normal text-slate-400">
-            Next {HORIZON} months, led by the estimate that tested best.
-          </p>
         </div>
 
         {onOpenAnalytics && (
@@ -248,7 +275,7 @@ function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
             onClick={onOpenAnalytics}
             className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
           >
-            Full forecast
+            Compare all 3 methods
             <ArrowRight size={14} />
           </button>
         )}
@@ -256,64 +283,57 @@ function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
 
       {!model ? (
         <div className="rounded-2xl border border-slate-100 bg-slate-50 py-5 text-center text-sm font-semibold text-slate-400">
-          Forecasts need readings in at least 3 different months.
+          Needs readings from at least 3 months.
         </div>
       ) : (
         <>
-          <div className="mb-4 grid gap-2 sm:grid-cols-2">
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2.5">
-              <p className="text-[10px] font-medium text-emerald-600">
-                {nextMonth.month} · {bestMethod.label}
-              </p>
-              <p className="mt-1 text-xl font-semibold text-emerald-800">
+          {/* Leads with the answer, not the machinery. The previous version put
+              "Method: Weighted MA / Best of 3" and "Avg error ±12%" beside the
+              figure, which describes how the system works rather than what the
+              reader came to find out. Which estimator won and how the three
+              compare is the Analytics page's job. */}
+          <div className="mb-4 border-y border-slate-100 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+              Next month · {nextMonth.month}
+            </p>
+
+            <div className="mt-1.5 flex flex-wrap items-center gap-2.5">
+              <p className="text-3xl font-semibold leading-none tracking-tight text-slate-950">
                 {formatNumber(nextValue)}
-                <span className="ml-1 text-xs font-medium text-emerald-500">kWh</span>
-                <span className="ml-2 text-sm font-semibold text-emerald-700">
-                  {formatPeso(nextValue * rate, { decimals: 0 })}
-                </span>
+                <span className="ml-1.5 text-sm font-medium text-slate-400">kWh</span>
               </p>
-              <div className="mt-1 flex items-center gap-1.5">
-                <span
-                  className={`rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${
-                    nextChange >= 0
-                      ? "border-red-100 bg-red-50 text-red-500"
-                      : "border-emerald-100 bg-white text-emerald-600"
-                  }`}
-                >
-                  {nextChange >= 0 ? "↑" : "↓"} {Math.abs(nextChange).toFixed(1)}%
-                </span>
-                <span className="text-[9px] font-normal text-slate-400">
-                  vs {lastMonth.month}
-                </span>
-              </div>
+
+              <TrendDelta change={nextChange} previousMonth={lastMonth.month} />
             </div>
 
-            <div className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-              <p className="text-[10px] font-medium text-slate-500">Why this estimate</p>
-              <p className="mt-1 text-xs leading-5 text-slate-600">
+            <p className="mt-2 text-sm font-normal text-slate-500">
+              About{" "}
+              <span className="font-semibold text-slate-900">
+                {formatPeso(nextValue * rate, { decimals: 0 })}
+              </span>{" "}
+              at {formatPeso(rate)} per kWh.
+            </p>
+
+            <p className="mt-3 flex items-start gap-1.5 text-xs font-normal leading-5 text-slate-400">
+              <span>
                 {bestMethod.error !== null
-                  ? `Closest when tested on the last ${model.testedMonths} month${
-                      model.testedMonths === 1 ? "" : "s"
-                    }: off by ${Math.round(bestMethod.error * 100)}% on average.`
-                  : "Not enough history to test the estimates yet, so the moving average leads."}
-              </p>
-              {otherMethods.length > 0 && (
-                <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                  {otherMethods
-                    .map((method) => `${method.label}: ${formatNumber(nextMonth[method.key])} kWh`)
-                    .join(" · ")}
-                </p>
-              )}
-            </div>
+                  ? `Checked against months that have already happened, this estimate has landed within about ${Math.round(
+                      bestMethod.error * 100
+                    )}% of the real figure.`
+                  : "There is not enough history yet to check how close this estimate lands, so treat it as a rough direction."}
+              </span>
+              <InfoHint term="forecastMethod" align="right" />
+            </p>
           </div>
 
-          <ForecastLegend model={model} className="mb-2" />
+          <ForecastLegend model={model} className="mb-2" leadingOnly />
 
           <ForecastChart
             model={model}
             className="h-44"
             gradientId="dashboardForecastBar"
             angledLabels={false}
+            leadingOnly
           />
         </>
       )}
@@ -367,217 +387,327 @@ function ToastMessage({ toast, onClose }) {
   );
 }
 
-function EnergyTrendChart({ monthlyConsumption, totalConsumption }) {
-  const chartData = monthlyConsumption.map((item) => ({
-    month: item.month,
-    value: Number(item.value || 0),
-  }));
+// Chart chrome follows the house data-viz rules: solid hairline gridlines (a
+// dashed grid reads as "threshold" when it is just a grid), a 2px line, an area
+// wash at ~10% opacity rather than a saturated block, and text in slate tokens
+// instead of the series colour.
+const TREND_LINE = "#059669";
+const TREND_GRID = "#eef2f7";
+const TREND_TICK = { fontSize: 11, fontWeight: 500, fill: "#94a3b8" };
 
-  const maxValue = Math.max(...chartData.map((item) => item.value), 1);
-  const width = 1000;
-  const height = 280;
-  const paddingX = 92;
-  const paddingTop = 32;
-  const paddingBottom = 50;
-  const chartHeight = height - paddingTop - paddingBottom;
-  const step =
-    chartData.length > 1
-      ? (width - paddingX * 2) / (chartData.length - 1)
-      : 0;
+const TREND_RANGES = [
+  { key: "6m", label: "6M", months: 6 },
+  { key: "12m", label: "12M", months: 12 },
+  { key: "all", label: "All", months: null },
+];
 
-  const points = chartData.map((item, index) => {
-    const x = paddingX + index * step;
-    const y = paddingTop + chartHeight - (item.value / maxValue) * chartHeight;
+function TrendDelta({ change, previousMonth, className = "" }) {
+  if (change === null || change === undefined) {
+    return null;
+  }
 
-    return {
-      ...item,
-      x,
-      y,
-    };
-  });
-
-  const linePath = points
-    .map((point, index) => {
-      if (index === 0) {
-        return `M ${point.x} ${point.y}`;
-      }
-
-      const previous = points[index - 1];
-      const controlX = (previous.x + point.x) / 2;
-
-      return `C ${controlX} ${previous.y}, ${controlX} ${point.y}, ${point.x} ${point.y}`;
-    })
-    .join(" ");
-
-  const areaPath =
-    points.length > 0
-      ? `${linePath} L ${points[points.length - 1].x} ${
-          height - paddingBottom
-        } L ${points[0].x} ${height - paddingBottom} Z`
-      : "";
-
-  const yTicks = [
-    maxValue,
-    maxValue * 0.75,
-    maxValue * 0.5,
-    maxValue * 0.25,
-    0,
-  ];
+  // Rising consumption is the bad direction, so the status colour is inverted
+  // against the usual "up is good" reading. Icon plus text, never colour alone.
+  const Icon = change === 0 ? Minus : change > 0 ? TrendingUp : TrendingDown;
+  const tone =
+    change === 0
+      ? "border-slate-200 bg-slate-50 text-slate-500"
+      : change > 0
+        ? "border-red-100 bg-red-50 text-red-600"
+        : "border-emerald-100 bg-emerald-50 text-emerald-700";
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-100 bg-gradient-to-b from-white to-emerald-50/40 px-5 pb-5 pt-5">
-      <div className="absolute right-6 top-6 z-10 hidden rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-xl md:block">
-        <p className="text-xs font-medium text-slate-900">Current Summary</p>
-        <p className="mt-1 text-[11px] font-normal text-emerald-700">
-          Total: {formatNumber(totalConsumption)} kWh
-        </p>
-        <p className="text-[11px] font-normal text-slate-400">
-          Based on saved meter readings
-        </p>
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${tone} ${className}`}
+    >
+      <Icon size={13} />
+      {change > 0 ? "+" : ""}
+      {formatDecimal(change, 1)}%
+      {previousMonth && (
+        <span className="font-medium opacity-70">vs {previousMonth}</span>
+      )}
+    </span>
+  );
+}
+
+function EnergyTrendTooltip({ active, payload, label }) {
+  if (!active || !payload || payload.length === 0) {
+    return null;
+  }
+
+  const point = payload[0]?.payload;
+
+  if (!point) {
+    return null;
+  }
+
+  return (
+    <div className="min-w-[180px] rounded-2xl border border-slate-100 bg-white px-4 py-3 shadow-xl">
+      <div className="flex items-center gap-2">
+        <span className="h-0.5 w-4 rounded-full bg-emerald-600" />
+
+        <p className="text-[11px] font-medium text-slate-400">{label}</p>
       </div>
 
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-[285px] w-full"
-        role="img"
-        aria-label="Monthly energy consumption trend chart"
+      <p className="mt-1.5 text-xl font-semibold tracking-tight text-slate-950">
+        {formatNumber(point.value)}
+        <span className="ml-1 text-xs font-medium text-slate-400">kWh</span>
+      </p>
+
+      {point.change !== null && (
+        <TrendDelta
+          change={point.change}
+          previousMonth={point.previousMonth}
+          className="mt-2"
+        />
+      )}
+    </div>
+  );
+}
+
+function TrendMetric({ label, value, hint, dashedKey = false }) {
+  return (
+    <div className="px-4 first:pl-0 last:pr-0">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+        {label}
+      </p>
+
+      <p className="mt-1 text-sm font-semibold text-slate-900">{value}</p>
+
+      {hint && (
+        <p className="mt-0.5 flex items-center gap-1.5 truncate text-xs font-normal text-slate-400">
+          {dashedKey && (
+            <span
+              aria-hidden="true"
+              className="block h-0 w-4 shrink-0"
+              style={{ borderTop: "1.5px dashed #cbd5e1" }}
+            />
+          )}
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EnergyTrendChart({ monthlyConsumption }) {
+  const [range, setRange] = useState("all");
+
+  const chartData = useMemo(
+    () =>
+      monthlyConsumption.map((item, index) => {
+        const value = Number(item.value || 0);
+        const previous =
+          index > 0 ? Number(monthlyConsumption[index - 1].value || 0) : 0;
+
+        return {
+          month: item.month,
+          // Twelve "Sep 2025" labels collide on the axis; the tooltip and the
+          // metric strip still spell the month out in full.
+          shortMonth: item.month.replace(" 20", " '"),
+          value,
+          previousMonth: index > 0 ? monthlyConsumption[index - 1].month : null,
+          change: previous > 0 ? ((value - previous) / previous) * 100 : null,
+        };
+      }),
+    [monthlyConsumption]
+  );
+
+  // Only offer a range that would actually hide something, so the control is
+  // never three buttons that all draw the same chart.
+  const rangeOptions = TREND_RANGES.filter(
+    (option) => option.months === null || chartData.length > option.months
+  );
+
+  const activeRange =
+    rangeOptions.find((option) => option.key === range) ??
+    rangeOptions[rangeOptions.length - 1];
+
+  const visible = activeRange?.months
+    ? chartData.slice(-activeRange.months)
+    : chartData;
+
+  if (visible.length === 0) {
+    return (
+      <EmptyState
+        icon={BarChart3}
+        title="No consumption yet"
+        description="Monthly usage appears here as soon as meter readings are saved."
+        className="min-h-[320px] flex-1"
+      />
+    );
+  }
+
+  const rangeTotal = visible.reduce((sum, item) => sum + item.value, 0);
+  const average = rangeTotal / visible.length;
+  const peakIndex = visible.reduce(
+    (best, item, index) => (item.value > visible[best].value ? index : best),
+    0
+  );
+  const peak = visible[peakIndex];
+  const latest = visible[visible.length - 1];
+
+  // Direct-label the endpoint and the peak only. A value on every point is
+  // noise, and the two that carry the story are the newest and the highest.
+  const renderPointLabel = ({ x, y, index }) => {
+    const isLast = index === visible.length - 1;
+    const isPeak = index === peakIndex;
+    // A peak label next door to the endpoint label would collide; the tooltip
+    // and the metric strip below still carry it.
+    const showPeak = isPeak && peakIndex < visible.length - 2;
+
+    if (!isLast && !showPeak) {
+      return null;
+    }
+
+    return (
+      <text
+        x={x}
+        y={y - 14}
+        textAnchor={isLast ? "end" : "middle"}
+        className="fill-slate-900 text-[11px] font-semibold"
       >
-        <defs>
-          <linearGradient id="dashboardEnergyArea" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#10b981" stopOpacity="0.35" />
-            <stop offset="55%" stopColor="#84cc16" stopOpacity="0.16" />
-            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
-          </linearGradient>
+        {isPeak ? "Peak " : ""}
+        {formatCompact(visible[index].value)}
+      </text>
+    );
+  };
 
-          <filter id="dashboardEnergyGlow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <p className="text-3xl font-semibold leading-none tracking-tight text-slate-950">
+              {formatNumber(latest.value)}
+              <span className="ml-1.5 text-sm font-medium text-slate-400">
+                kWh
+              </span>
+            </p>
 
-        {yTicks.map((tick, index) => {
-          const y = paddingTop + (chartHeight / 4) * index;
+            <TrendDelta
+              change={latest.change}
+              previousMonth={latest.previousMonth}
+            />
+          </div>
 
-          return (
-            <g key={`${tick}-${index}`}>
-              <line
-                x1={paddingX}
-                y1={y}
-                x2={width - paddingX}
-                y2={y}
-                stroke="#e2e8f0"
-                strokeDasharray={index === yTicks.length - 1 ? "0" : "8 8"}
-              />
+          <p className="mt-2 text-xs font-medium text-slate-400">
+            {latest.month} · latest month with saved readings
+          </p>
+        </div>
 
-              <text
-                x={paddingX - 14}
-                y={y + 5}
-                textAnchor="end"
-                className="fill-slate-400 text-[11px] font-medium"
-              >
-                {`${formatCompact(tick)} kWh`}
-              </text>
-            </g>
-          );
-        })}
+        {rangeOptions.length > 1 && (
+          <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-0.5">
+            {rangeOptions.map((option) => {
+              const isActive = option.key === activeRange?.key;
 
-        {areaPath && (
-          <path
-            d={areaPath}
-            fill="url(#dashboardEnergyArea)"
-            className="origin-bottom animate-[dashboardEnergyFadeIn_900ms_ease-out_both]"
-          />
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setRange(option.key)}
+                  aria-pressed={isActive}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                    isActive
+                      ? "bg-white text-slate-900 shadow-sm"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         )}
+      </div>
 
-        {linePath && (
-          <path
-            d={linePath}
-            fill="none"
-            stroke="#059669"
-            strokeWidth="5"
-            strokeLinecap="round"
-            filter="url(#dashboardEnergyGlow)"
-            className="animate-[dashboardEnergyDraw_1300ms_ease-out_both]"
-          />
-        )}
-
-        {points.map((point, index) => (
-          <g
-            key={point.month}
-            className="animate-[dashboardEnergyPop_700ms_ease-out_both]"
-            style={{ animationDelay: `${index * 70 + 300}ms` }}
+      <div className="mt-4 min-h-[300px] flex-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart
+            data={visible}
+            margin={{ top: 30, right: 16, bottom: 0, left: 0 }}
           >
-            <circle
-              cx={point.x}
-              cy={point.y}
-              r="7"
-              fill="white"
-              stroke="#059669"
-              strokeWidth="4"
+            <defs>
+              <linearGradient id="dashboardEnergyArea" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={TREND_LINE} stopOpacity={0.14} />
+                <stop offset="100%" stopColor={TREND_LINE} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+
+            <CartesianGrid vertical={false} stroke={TREND_GRID} />
+
+            <XAxis
+              dataKey="shortMonth"
+              tick={TREND_TICK}
+              axisLine={false}
+              tickLine={false}
+              minTickGap={4}
+              interval="preserveStartEnd"
+              height={28}
+              dy={4}
             />
 
-            {point.value > 0 && (
-              <text
-                x={point.x}
-                y={point.y - 17}
-                textAnchor="middle"
-                className="fill-emerald-700 text-[12px] font-medium"
-              >
-                {formatCompact(point.value)}
-              </text>
-            )}
+            <YAxis
+              tick={TREND_TICK}
+              tickFormatter={formatCompact}
+              axisLine={false}
+              tickLine={false}
+              width={52}
+            />
 
-            <text
-              x={point.x}
-              y={height - 18}
-              textAnchor="middle"
-              className="fill-slate-500 text-[13px] font-medium"
+            <Tooltip
+              content={<EnergyTrendTooltip />}
+              cursor={{ stroke: "#cbd5e1", strokeWidth: 1 }}
+            />
+
+            <ReferenceLine y={average} stroke="#cbd5e1" strokeDasharray="4 4" />
+
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke={TREND_LINE}
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="url(#dashboardEnergyArea)"
+              // r 4 plus the 2px surface ring is the 8px minimum marker.
+              dot={{ r: 4, fill: TREND_LINE, stroke: "#ffffff", strokeWidth: 2 }}
+              activeDot={{
+                r: 6,
+                fill: TREND_LINE,
+                stroke: "#ffffff",
+                strokeWidth: 2.5,
+              }}
+              isAnimationActive
+              animationDuration={800}
+              animationEasing="ease-out"
             >
-              {point.month}
-            </text>
-          </g>
-        ))}
-      </svg>
+              <LabelList dataKey="value" content={renderPointLabel} />
+            </Area>
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
 
-      <style>
-        {`
-          @keyframes dashboardEnergyDraw {
-            from {
-              stroke-dasharray: 1600;
-              stroke-dashoffset: 1600;
-            }
-            to {
-              stroke-dasharray: 1600;
-              stroke-dashoffset: 0;
-            }
-          }
+      <div className="mt-4 flex flex-wrap divide-x divide-slate-100 border-t border-slate-100 pt-4">
+        <TrendMetric
+          label="Range total"
+          value={`${formatNumber(rangeTotal)} kWh`}
+          hint={`${visible.length} month${visible.length === 1 ? "" : "s"} shown`}
+        />
 
-          @keyframes dashboardEnergyFadeIn {
-            from {
-              opacity: 0;
-              transform: scaleY(0.92);
-            }
-            to {
-              opacity: 1;
-              transform: scaleY(1);
-            }
-          }
+        <TrendMetric
+          label="Avg / month"
+          value={`${formatCompact(average)} kWh`}
+          hint="Dashed line"
+          dashedKey
+        />
 
-          @keyframes dashboardEnergyPop {
-            from {
-              opacity: 0;
-              transform: translateY(10px) scale(0.88);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
-          }
-        `}
-      </style>
+        <TrendMetric
+          label="Peak"
+          value={`${formatCompact(peak.value)} kWh`}
+          hint={peak.month}
+        />
+      </div>
     </div>
   );
 }
@@ -592,7 +722,7 @@ function SectionCard({ children, className = "" }) {
   );
 }
 
-function EuiComparisonCard({ buildingComparison, setCurrentPage, rate }) {
+function EuiComparisonCard({ buildingComparison, setCurrentPage, rate, onOpenBuilding }) {
   const topBuildings = buildingComparison.slice(0, 4);
   const maxEui = Math.max(...topBuildings.map((item) => item.eui), 1);
 
@@ -631,9 +761,12 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage, rate }) {
             const width = Math.max(8, Math.round((item.eui / maxEui) * 100));
 
             return (
-              <div
+              <button
                 key={item.building_id}
-                className="animate-[sectionRise_450ms_ease-out_both] rounded-2xl border border-slate-100 bg-slate-50 p-4 transition duration-300 hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-white hover:shadow-md"
+                type="button"
+                onClick={() => onOpenBuilding?.(item)}
+                title={`Open ${item.building}'s profile`}
+                className="block w-full animate-[sectionRise_450ms_ease-out_both] rounded-2xl border border-slate-100 bg-slate-50 p-4 text-left transition duration-300 hover:-translate-y-0.5 hover:border-emerald-100 hover:bg-white hover:shadow-md"
                 style={{ animationDelay: `${index * 75}ms` }}
               >
                 <div className="mb-3 flex items-start justify-between gap-3">
@@ -676,7 +809,7 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage, rate }) {
                     style={{ width: `${width}%` }}
                   />
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -826,7 +959,13 @@ export default function Dashboard({ role, setCurrentPage }) {
   const [meters, setMeters] = useState([]);
   const [readings, setReadings] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [profileBuilding, setProfileBuilding] = useState(null);
   const { rate, isFallback: isRateFallback, error: rateError } = useElectricityRate();
+
+  // Takes a buildingAnalytics row ({ building_id, building, ... }).
+  function openBuildingProfile(row) {
+    setProfileBuilding({ building_id: row.building_id, name: row.building });
+  }
   const [toast, setToast] = useState({
     message: "",
     type: "success",
@@ -904,7 +1043,8 @@ export default function Dashboard({ role, setCurrentPage }) {
     refreshDashboardData,
     {
       intervalMs: AUTO_REFRESH_MS,
-      enabled: true,
+      // Paused while a building profile is open; the profile loads its own data.
+      enabled: !profileBuilding,
       runOnMount: true,
     }
   );
@@ -1096,14 +1236,16 @@ export default function Dashboard({ role, setCurrentPage }) {
       color: "emerald",
     },
     {
-      title: "Total Usage",
+      title: "Total Energy Used",
+      hint: "measuredVsEstimated",
       value: formatNumber(totalConsumption),
       subtitle: `kWh · ≈ ${formatPeso(totalCost, { decimals: 0 })} estimated bill`,
       icon: Zap,
       color: "emerald",
     },
     {
-      title: "Average EUI",
+      title: "Energy Intensity",
+      hint: "eui",
       value: formatDecimal(averageEui),
       subtitle: highestBuilding
         ? `kWh/m² · Highest: ${highestBuilding.building}`
@@ -1112,7 +1254,8 @@ export default function Dashboard({ role, setCurrentPage }) {
       color: averageEui > 20 ? "red" : averageEui > 10 ? "amber" : "emerald",
     },
     {
-      title: "Pending OCR",
+      title: "Readings to Check",
+      hint: "needsReview",
       value: pendingReadings.length,
       subtitle: `${verifiedReadings.length} verified readings saved`,
       icon: ScanLine,
@@ -1148,8 +1291,8 @@ export default function Dashboard({ role, setCurrentPage }) {
       </section>
 
       <section className="grid gap-5 lg:grid-cols-[1.7fr_1fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-950">
                 Energy Consumption Trend
@@ -1163,16 +1306,14 @@ export default function Dashboard({ role, setCurrentPage }) {
             <button
               type="button"
               onClick={() => setCurrentPage && setCurrentPage("analytics")}
-              className="w-full rounded-xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 sm:w-auto"
+              className="inline-flex items-center gap-1.5 self-start rounded-xl border border-slate-200 px-3.5 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
             >
               View Analytics
+              <ArrowRight size={15} />
             </button>
           </div>
 
-          <EnergyTrendChart
-            monthlyConsumption={monthlyConsumption}
-            totalConsumption={totalConsumption}
-          />
+          <EnergyTrendChart monthlyConsumption={monthlyConsumption} />
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -1183,7 +1324,7 @@ export default function Dashboard({ role, setCurrentPage }) {
               </h2>
 
               <p className="mt-1 text-sm font-normal text-slate-400">
-                Building EUI status preview.
+                Building EUI status preview. Click a pin for its full profile.
               </p>
             </div>
 
@@ -1203,11 +1344,15 @@ export default function Dashboard({ role, setCurrentPage }) {
 
             <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
               <TrendingUp size={14} />
-              EUI {formatDecimal(averageEui)}
+              Intensity {formatDecimal(averageEui)}
             </div>
           </div>
 
-          <MiniEnergyMap buildings={buildingAnalytics} height={315} />
+          <MiniEnergyMap
+            buildings={buildingAnalytics}
+            height={315}
+            onSelectBuilding={openBuildingProfile}
+          />
 
           <div className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 sm:grid-cols-4">
             <span className="flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
@@ -1255,6 +1400,7 @@ export default function Dashboard({ role, setCurrentPage }) {
           buildingComparison={buildingComparison}
           setCurrentPage={setCurrentPage}
           rate={rate}
+          onOpenBuilding={openBuildingProfile}
         />
 
         <OcrStatusCard
@@ -1344,6 +1490,17 @@ export default function Dashboard({ role, setCurrentPage }) {
         </div>
 
       </section>
+
+      {profileBuilding && (
+        <Suspense fallback={null}>
+          <BuildingProfile
+            key={profileBuilding.building_id}
+            buildingId={profileBuilding.building_id}
+            buildingName={profileBuilding.name}
+            onClose={() => setProfileBuilding(null)}
+          />
+        </Suspense>
+      )}
 
       <style>
         {`

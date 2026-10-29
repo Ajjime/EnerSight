@@ -122,7 +122,10 @@ const nav = [
     label: "Reports",
     hint: "View reports",
     icon: FileText,
-    roles: ["Admin", "Manager"],
+    // Facilities Staff generate reports in the use case, and the page is
+    // read-only - it summarises saved readings and has no write path - so the
+    // access it needs is already what every signed-in role has.
+    roles: ["Admin", "Manager", "Staff"],
   },
   {
     id: "analytics",

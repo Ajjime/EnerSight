@@ -1,6 +1,8 @@
 import React from "react";
 import { Clock3, RefreshCw } from "lucide-react";
 
+import { getShortRoleLabel } from "../utils/roles";
+
 function formatLastUpdated(value) {
   if (!value) {
     return "--:--";
@@ -90,7 +92,7 @@ export default function PageHeader({
 
           {hasPills && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {role && <HeaderPill>Role: {role}</HeaderPill>}
+              {role && <HeaderPill>Role: {getShortRoleLabel(role)}</HeaderPill>}
               {status && <HeaderPill>{status}</HeaderPill>}
               {children}
             </div>

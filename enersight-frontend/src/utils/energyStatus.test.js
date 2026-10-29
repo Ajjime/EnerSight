@@ -64,21 +64,24 @@ describe("getEnergyStatus", () => {
     expect(getEnergyStatus(5000, 0)).toBe("No Data");
   });
 
-  it("uses strict thresholds: above 10 is High, above 20 is Critical", () => {
-    expect(EUI_HIGH_THRESHOLD).toBe(10);
-    expect(EUI_CRITICAL_THRESHOLD).toBe(20);
-    expect(getEnergyStatus(1000, 100)).toBe("Normal");
-    expect(getEnergyStatus(1001, 100)).toBe("High");
-    expect(getEnergyStatus(2000, 100)).toBe("High");
-    expect(getEnergyStatus(2001, 100)).toBe("Critical");
+  it("uses strict thresholds: above 150 is High, above 250 is Critical", () => {
+    // Set against real building benchmarks: schools and offices generally run
+    // 100-300 kWh/m2 a year, so a Critical tag has to mean something a facilities
+    // engineer would also call high.
+    expect(EUI_HIGH_THRESHOLD).toBe(150);
+    expect(EUI_CRITICAL_THRESHOLD).toBe(250);
+    expect(getEnergyStatus(15000, 100)).toBe("Normal");
+    expect(getEnergyStatus(15001, 100)).toBe("High");
+    expect(getEnergyStatus(25000, 100)).toBe("High");
+    expect(getEnergyStatus(25001, 100)).toBe("Critical");
   });
 
   it("grades a month and a year of the same usage the same way", () => {
-    // 2,650 kWh a month in a 1,450 m² lab is about 22 kWh/m² a year.
-    expect(getEnergyStatus(2650, 1450, 30)).toBe("Critical");
-    expect(getEnergyStatus(2650 * 12, 1450, 365)).toBe("Critical");
-    // Unannualised, one month looks like a tenth of that.
-    expect(getEnergyStatus(2650, 1450)).toBe("Normal");
+    // 33,000 kWh a month in a 1,450 m² lab is about 277 kWh/m² a year.
+    expect(getEnergyStatus(33000, 1450, 30)).toBe("Critical");
+    expect(getEnergyStatus(33000 * 12, 1450, 365)).toBe("Critical");
+    // Unannualised, one month looks like a twelfth of that.
+    expect(getEnergyStatus(33000, 1450)).toBe("Normal");
   });
 });
 
@@ -179,8 +182,8 @@ describe("getReadingSpanDays", () => {
 
   it("fixes Last Month grading every building Normal", () => {
     const all = annotateReadingCoverage([
-      { record_id: 1, meter_id: 1, reading_date: "2026-07-03T10:00:00Z", differential: 2800 },
-      { record_id: 2, meter_id: 1, reading_date: "2026-08-02T10:00:00Z", differential: 2650 },
+      { record_id: 1, meter_id: 1, reading_date: "2026-07-03T10:00:00Z", differential: 35000 },
+      { record_id: 2, meter_id: 1, reading_date: "2026-08-02T10:00:00Z", differential: 33000 },
     ]);
     const august = all.filter((reading) => reading.reading_date.startsWith("2026-08"));
     const total = august.reduce((sum, reading) => sum + reading.differential, 0);
