@@ -131,6 +131,9 @@ class ReadingCreate(BaseModel):
     reading_date: Optional[datetime] = None
     image_path: Optional[str] = None
     ocr_accuracy: Optional[float] = Field(default=None, ge=0, le=100)
+    # What OCR read, as a digit string so leading zeros survive. Set once at
+    # creation; PUT /readings/{id} ignores it.
+    ocr_reading: Optional[str] = Field(default=None, max_length=12, pattern=r"^[0-9]+$")
 
 
 class ReadingResponse(ReadingCreate):
@@ -139,6 +142,41 @@ class ReadingResponse(ReadingCreate):
     # Output only; see the note on ReadingCreate.
     user_id: Optional[int] = None
     is_verified: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class ReportCreate(BaseModel):
+    """A snapshot of a report the user just generated.
+
+    The figures are sent by the client because the Reports page already computes
+    them from the readings it has loaded; this records what was presented, which
+    is the point of an audit snapshot. `building_id` null means the report covered
+    the whole campus.
+
+    `user_id` and `generated_at` are deliberately absent: both are set from the
+    server, so a saved report cannot be attributed to somebody else or backdated.
+    """
+
+    building_id: Optional[int] = None
+    # Long enough to carry the period alongside the type, since Table 2.5 gives
+    # the snapshot no separate period column.
+    report_type: str = Field(min_length=1, max_length=120)
+    total_consumption: float = Field(default=0, ge=0)
+    average_consumption: float = Field(default=0, ge=0)
+    peak_consumption: float = Field(default=0, ge=0)
+
+
+class ReportResponse(BaseModel):
+    report_id: int
+    building_id: Optional[int] = None
+    user_id: Optional[int] = None
+    report_type: Optional[str] = None
+    total_consumption: float = 0
+    average_consumption: float = 0
+    peak_consumption: float = 0
+    generated_at: datetime
 
     class Config:
         from_attributes = True

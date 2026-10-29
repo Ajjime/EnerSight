@@ -15,8 +15,8 @@ router = APIRouter(
 
 # Operating bands for energy-use intensity, in kWh per square metre per year.
 # Mirrored on the frontend in src/utils/energyStatus.js; change both together.
-EUI_CRITICAL_THRESHOLD = 20
-EUI_HIGH_THRESHOLD = 10
+EUI_CRITICAL_THRESHOLD = 250
+EUI_HIGH_THRESHOLD = 150
 
 # Below this many days an extrapolation to a full year is noise, not a signal.
 # Was 28, which left some one-month intervals (they run about 25 to 34 days) judged

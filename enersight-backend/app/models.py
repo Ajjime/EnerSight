@@ -70,6 +70,12 @@ class ConsumptionRecord(Base):
     reading_date = Column(DateTime, default=datetime.utcnow)
     image_path = Column(String, nullable=True)
     ocr_accuracy = Column(Float, nullable=True)
+    # The digits OCR proposed, exactly as read (leading zeros kept), or NULL for a
+    # typed-in reading. reading_value is what the person saved, so the two differ
+    # when they corrected the scan. Together with image_path that makes every
+    # confirmed OCR reading a labelled photo of a real campus meter, which is the
+    # training data the trained models lack (export_ocr_dataset.py collects them).
+    ocr_reading = Column(String, nullable=True)
     is_verified = Column(Boolean, default=False)
 
     meter = relationship("Meter", back_populates="consumption_records")
@@ -101,10 +107,30 @@ class Setting(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-# The EnergyReport model was removed. Reports are computed on demand from
-# consumption_records, so nothing ever read or wrote that table; it only added a
-# phantom entity to the schema. Recover it from git history if stored report
-# snapshots are ever needed.
+class EnergyReport(Base):
+    """A saved snapshot of a generated report.
+
+    This model was removed once, correctly: reports are computed on demand from
+    consumption_records, and a table nothing ever reads or writes is a phantom
+    entity in the schema. It is back because it is now actually used - the Reports
+    page saves a snapshot through POST /reports/ and lists them again - which is
+    what the audit-support claim needs. Delete it again if that ever stops being
+    true.
+
+    `building_id` is nullable, and null means the report covered the whole campus
+    rather than one building.
+    """
+
+    __tablename__ = "energy_reports"
+
+    report_id = Column(Integer, primary_key=True, index=True)
+    building_id = Column(Integer, ForeignKey("buildings.building_id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+    report_type = Column(String, nullable=True)
+    total_consumption = Column(Float, default=0)
+    average_consumption = Column(Float, default=0)
+    peak_consumption = Column(Float, default=0)
+    generated_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class AccessLog(Base):

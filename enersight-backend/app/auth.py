@@ -40,6 +40,12 @@ _bearer_scheme = HTTPBearer()
 # at all, so a user could register with a password they could never change to.
 MIN_PASSWORD_LENGTH = 8
 
+# Account lockout. The attempts are counted out of access_log rather than held in
+# a column on `users`, so this needs no migration on a database that already has
+# rows, and every blocked attempt stays visible in the audit trail.
+LOGIN_LOCKOUT_ATTEMPTS = int(os.getenv("LOGIN_LOCKOUT_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
 
 def validate_password(password: Optional[str]) -> str:
     """Returns the password, or raises 400 with the reason it was rejected."""

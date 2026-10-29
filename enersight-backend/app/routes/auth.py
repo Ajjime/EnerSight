@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 
 from app import audit
 from app.auth import (
+    LOGIN_LOCKOUT_ATTEMPTS,
+    LOGIN_LOCKOUT_MINUTES,
     create_access_token,
     get_current_user,
     hash_password,
@@ -54,10 +56,43 @@ def login(login_data: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid username or password",
         )
 
+    # Checked before the password, so a locked account cannot be probed by how
+    # long a guess takes to come back. This does tell someone who has already
+    # guessed five times that the username is real - that is inherent to telling
+    # a locked-out user why they are locked out, and the alternative is a real
+    # user with no idea why their correct password stopped working.
+    failed_attempts = audit.count_failed_logins(
+        db, user.user_id, LOGIN_LOCKOUT_MINUTES
+    )
+
+    if failed_attempts >= LOGIN_LOCKOUT_ATTEMPTS:
+        audit.log_action(db, audit.LOGIN_BLOCKED, user.user_id)
+        db.commit()
+
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                f"Too many failed sign-in attempts. Wait {LOGIN_LOCKOUT_MINUTES} "
+                "minutes and try again, or ask an administrator to reset your "
+                "password."
+            ),
+        )
+
     if not verify_password(login_data.password, user.password_hash):
+        audit.log_action(db, audit.LOGIN_FAILED, user.user_id)
+        db.commit()
+
+        attempts_left = LOGIN_LOCKOUT_ATTEMPTS - failed_attempts - 1
+        warning = (
+            f" {attempts_left} attempt{'' if attempts_left == 1 else 's'} left "
+            "before this account is locked."
+            if 0 < attempts_left <= 2
+            else ""
+        )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid username or password",
+            detail=f"Invalid username or password.{warning}",
         )
 
     # Without this the login succeeds and issues a token, then every subsequent

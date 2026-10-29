@@ -10,6 +10,7 @@ was performing. A lost log line is much less bad than a lost reading.
 """
 
 import logging
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Action names. Kept as constants so the strings in the table stay consistent and
 # are greppable, rather than being typed out at each call site.
 LOGIN = "LOGIN"
+LOGIN_FAILED = "LOGIN_FAILED"
 LOGIN_BLOCKED = "LOGIN_BLOCKED"
 
 USER_CREATED = "USER_CREATED"
@@ -45,6 +47,9 @@ READING_UPDATED = "READING_UPDATED"
 READING_VERIFIED = "READING_VERIFIED"
 READING_UNVERIFIED = "READING_UNVERIFIED"
 READING_DELETED = "READING_DELETED"
+
+REPORT_SAVED = "REPORT_SAVED"
+REPORT_DELETED = "REPORT_DELETED"
 
 RATE_UPDATED = "RATE_UPDATED"
 
@@ -70,3 +75,37 @@ def log_action(
         db.add(AccessLog(user_id=user_id, action_type=action_type[:255]))
     except Exception as exc:  # noqa: BLE001 - auditing must not break the request
         logger.warning("Could not write audit entry %r: %s", action_type, exc)
+
+
+def count_failed_logins(db: Session, user_id: int, within_minutes: int) -> int:
+    """Failed sign-ins for one account inside the lockout window.
+
+    Counted from the later of "the window opened" and "this account last signed in
+    successfully", so a correct password clears the slate without anything having
+    to delete audit rows. The log stays a record of what happened rather than a
+    counter that gets reset.
+
+    Reading the attempts back out of access_log is also why lockout needs no new
+    column on `users`, and so no migration for an existing database.
+    """
+    window_start = datetime.utcnow() - timedelta(minutes=within_minutes)
+
+    last_success = (
+        db.query(AccessLog.log_datetime)
+        .filter(AccessLog.user_id == user_id, AccessLog.action_type == LOGIN)
+        .order_by(AccessLog.log_datetime.desc())
+        .first()
+    )
+
+    if last_success and last_success[0] and last_success[0] > window_start:
+        window_start = last_success[0]
+
+    return (
+        db.query(AccessLog)
+        .filter(
+            AccessLog.user_id == user_id,
+            AccessLog.action_type == LOGIN_FAILED,
+            AccessLog.log_datetime > window_start,
+        )
+        .count()
+    )
