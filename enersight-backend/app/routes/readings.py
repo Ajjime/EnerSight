@@ -205,6 +205,10 @@ def update_reading(
     # Popping an omitted reading_date keeps the record's existing timestamp.
     reading_data = apply_reading_rules(updated_reading.model_dump())
 
+    # What OCR originally read is evidence, not an editable field. An edit form
+    # that does not send it would otherwise erase it.
+    reading_data.pop("ocr_reading", None)
+
     for key, value in reading_data.items():
         setattr(reading, key, value)
 

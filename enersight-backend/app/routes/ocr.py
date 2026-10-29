@@ -26,6 +26,7 @@ tight digit crop the trained models expect.
 
 import logging
 import re
+import threading
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -41,6 +42,7 @@ from ..models import User
 from ..ocr_models.inference import VARIANTS as _DTRB_VARIANTS
 from ..ocr_models.inference import available_variants as _dtrb_available
 from ..ocr_models.inference import predict as _dtrb_predict
+from ..ocr_models.inference import weight_files as _dtrb_weight_files
 
 # Force-load .env from the backend root (works regardless of cwd). Keeps the
 # optional *_MODEL_PATH overrides read by ocr_models/inference.py available.
@@ -68,7 +70,19 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
+# One scan at a time. Each one holds a few GB while EasyOCR's detector runs, and the
+# upload page used to start a new scan on every photo pick; three overlapping scans
+# filled a 16 GB laptop, it swapped, and none of them ever finished. A queued scan
+# waits this long for its turn, then gets a 503 instead of piling up.
+_OCR_LOCK = threading.Lock()
+OCR_QUEUE_WAIT_SECONDS = 90
+
 MIN_RELIABLE_CONFIDENCE = 0.70
+# Below this the "reading" is noise, not a misread: a photo of a lecture slide came
+# back as 4174337 at 4%. Returning it as a detected reading invited someone to save
+# it, so it is reported as no reading instead. Correct reads on the real photos have
+# scored 0.53 and up, so this only removes garbage.
+MIN_USABLE_CONFIDENCE = 0.30
 MIN_DIGITS = 3
 MAX_DIGITS = 8
 
@@ -246,6 +260,28 @@ def _find_digit_band(binary: np.ndarray) -> tuple[np.ndarray, int]:
     return binary[y_min:y_max, :], y_min
 
 
+def _dtrb_crop_around(img: np.ndarray, box: tuple[int, int, int, int]) -> np.ndarray:
+    """
+    The trained models' input: the text EasyOCR's detector found, widened.
+
+    The binary localisation below was written for a different reader, and on real
+    uploads it handed the models two LCD rows at once, half the meter body, or a
+    row with digits cut off ("118" for 11847). EasyOCR's CRAFT detector finds the
+    reading reliably, so the trained models get the same region and read it
+    independently. It is widened sideways because the detector tends to miss thin
+    "1"s at the ends of a seven-segment row, and padded like the training crops
+    (digit boxes plus a margin).
+    """
+    x0, y0, x1, y1 = box
+    h = max(1, y1 - y0)
+    pad_x, pad_y = int(h * 0.6), int(h * 0.25)
+    crop = img[
+        max(0, y0 - pad_y):min(img.shape[0], y1 + pad_y),
+        max(0, x0 - pad_x):min(img.shape[1], x1 + pad_x),
+    ]
+    return crop if crop.size else img
+
+
 def _prepare_dtrb_crop(img: np.ndarray) -> np.ndarray:
     """
     Tight crop around the digit row, for the trained DTRB models.
@@ -302,16 +338,21 @@ _LCD_MAP = {
     "A": "4",
 }
 
-_OCR_KW = dict(
-    allowlist="0123456789",
-    detail=1,
-    paragraph=False,
+# EasyOCR's readtext() is detect() followed by recognize(); the two are called
+# separately below so the text boxes are found once per photo, not once per variant.
+_DETECT_KW = dict(
     text_threshold=0.45,
     low_text=0.30,
     link_threshold=0.25,
+    # Don't lower this to save time: at 1280 the 09732 eval photo read "089732".
     canvas_size=2560,
     mag_ratio=1.2,
     add_margin=0.10,
+)
+_RECOGNIZE_KW = dict(
+    allowlist="0123456789",
+    detail=1,
+    paragraph=False,
 )
 
 
@@ -341,10 +382,13 @@ def _score_easyocr(digits: str, conf: float, bh_norm: float) -> float:
 def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
     """
     EasyOCR pass on a prepared crop.
-    Returns (best_digits, confidence) or ("", 0.0).
+    Returns (best_digits, confidence, box) or ("", 0.0, None), where box is the
+    (x0, y0, x1, y1) of the text the reading came from, in `img`'s own pixels.
     """
     reader = _get_reader()
+    original_width = img.shape[1]
     img = _upscale(img, min_w=1400)
+    to_input = original_width / img.shape[1]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     ce   = cv2.createCLAHE(3.0, (8, 8)).apply(gray)
     enh  = cv2.cvtColor(
@@ -376,24 +420,41 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
     )
     adapt_bgr = cv2.cvtColor(adapt, cv2.COLOR_GRAY2BGR)
 
+    # Detect text boxes once, on the unprocessed image, and read those same boxes out
+    # of every variant. The variants share its size and geometry, so the boxes line
+    # up. Detection (the CRAFT network) is ~90% of the cost: running it per variant,
+    # as readtext() did, took 2-3 minutes on a full-size phone photo on a laptop CPU,
+    # and a few queued scans exhausted the RAM. On the eval photos and the 00653
+    # campus photo this returns the same readings 3-4x faster.
+    try:
+        horizontal, free = reader.detect(img, **_DETECT_KW)
+    except Exception as exc:
+        logger.warning("EasyOCR detection failed: %s", exc)
+        return "", 0.0, None
+    horizontal, free = horizontal[0], free[0]
+    if not horizontal and not free:
+        return "", 0.0, None
+
     all_cands: list[dict] = []
     for vimg in (img, enh, inv, bilat_enh, adapt_bgr):
         h = vimg.shape[0]
         try:
-            raw = reader.readtext(vimg, **_OCR_KW)
+            raw = reader.recognize(vimg, horizontal, free, **_RECOGNIZE_KW)
         except Exception:
             continue
         for bbox, text, conf in raw:
             d = _clean(text)
             if not _valid(d):
                 continue
+            xs  = [p[0] for p in bbox]
             ys  = [p[1] for p in bbox]
             bh  = float(max(ys) - min(ys))
             s   = _score_easyocr(d, float(conf), bh / h if h else 0.05)
-            all_cands.append({"d": d, "c": float(conf), "s": s})
+            box = tuple(int(round(v * to_input)) for v in (min(xs), min(ys), max(xs), max(ys)))
+            all_cands.append({"d": d, "c": float(conf), "s": s, "box": box})
 
     if not all_cands:
-        return "", 0.0
+        return "", 0.0, None
 
     votes: Counter = Counter(c["d"] for c in all_cands)
     for c in all_cands:
@@ -402,7 +463,7 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
 
     all_cands.sort(key=lambda x: x["s"], reverse=True)
     best = all_cands[0]
-    return best["d"], best["c"]
+    return best["d"], best["c"], best["box"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -422,6 +483,13 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
 # So a single trained model must never be able to overrule EasyOCR on confidence
 # alone. It takes corroboration: at least this many of them agreeing on the same
 # string. With three models installed that means a majority of them.
+#
+# Agreement alone is not enough either. The three models learned from the same data
+# and fail the same way, by cutting a reading short, so two of them agreeing on
+# "0876" is one mistake made twice, not two independent witnesses. An override
+# therefore also has to outnumber EasyOCR's side (EasyOCR plus any trained model
+# that read what it read), and can never be a shortened copy of EasyOCR's reading.
+# Even then the result is sent for review: see "overrode_easyocr" below.
 _MIN_TRAINED_VOTES_TO_OVERRIDE = 2
 
 # Ranking weight among the trained models themselves (their benchmark char
@@ -435,20 +503,30 @@ _AGREEMENT_BONUS = 0.05
 _MAX_ENSEMBLE_CONFIDENCE = 0.995
 
 
+def _is_truncation_of(candidate: str, reading: str) -> bool:
+    """True when `candidate` is `reading` with digits missing from the start or end,
+    the way the trained models fail ("0876" for "087654")."""
+    return len(candidate) < len(reading) and candidate in reading
+
+
 def _run_ensemble(img: np.ndarray) -> dict:
     """
     Read the meter with every available engine and reconcile them into one answer.
 
     Voters: EasyOCR (full image, existing pipeline) plus each trained DTRB model
-    that has a checkpoint installed (tight digit crop, which is what they expect).
+    that has a checkpoint installed (a digit-row crop of the region EasyOCR's
+    detector found, which is what they were trained on; see _dtrb_crop_around).
 
     Candidates are grouped by exact digit string, and the answer is decided by:
 
       1. no valid reading anywhere            -> nothing
       2. EasyOCR has none                     -> best-scoring trained group
       3. trained models back EasyOCR's string -> that, with an agreement bonus
-      4. >= _MIN_TRAINED_VOTES_TO_OVERRIDE trained models agree on something else
-                                              -> that group overrules EasyOCR
+      4. a trained group overrules EasyOCR only when all of these hold:
+           - >= _MIN_TRAINED_VOTES_TO_OVERRIDE trained models agree on it
+           - it has more votes than EasyOCR's side (EasyOCR counts as one)
+           - it is not a shortened copy of EasyOCR's reading
+         and the result is flagged "overrode_easyocr" so it goes to review
       5. otherwise                            -> EasyOCR
 
     Rules 4 and 5 are the point: on the real photos a lone trained model is often
@@ -458,11 +536,14 @@ def _run_ensemble(img: np.ndarray) -> dict:
     Degrades cleanly — with no checkpoints installed the only voter is EasyOCR and
     the result matches the previous EasyOCR-only fallback.
     """
-    dtrb_crop = _prepare_dtrb_crop(img)
-
     voters: list[dict] = []
 
-    eocr_digits, eocr_conf = _easyocr_read(img)
+    eocr_digits, eocr_conf, eocr_box = _easyocr_read(img)
+    # The trained models read the region EasyOCR's detector found; the older
+    # binary localisation is only the fallback for when it found nothing.
+    dtrb_crop = (
+        _dtrb_crop_around(img, eocr_box) if eocr_box else _prepare_dtrb_crop(img)
+    )
     voters.append({
         "source":              "easyocr",
         "label":               "EasyOCR",
@@ -518,12 +599,19 @@ def _run_ensemble(img: np.ndarray) -> dict:
     )
     best_trained = next(((d, m) for d, m in trained_groups if m), None)
 
+    overrode_easyocr = False
     if easyocr_read is None:
         winner, decision = best_trained[0], "easyocr found nothing; trained models decided"
     elif best_trained and best_trained[0] == easyocr_read:
         winner, decision = easyocr_read, "trained models agreed with easyocr"
-    elif best_trained and len(best_trained[1]) >= _MIN_TRAINED_VOTES_TO_OVERRIDE:
+    elif (
+        best_trained
+        and len(best_trained[1]) >= _MIN_TRAINED_VOTES_TO_OVERRIDE
+        and len(best_trained[1]) > len(groups[easyocr_read])
+        and not _is_truncation_of(best_trained[0], easyocr_read)
+    ):
         winner = best_trained[0]
+        overrode_easyocr = True
         decision = (
             f"{len(best_trained[1])} trained models overruled easyocr "
             f"({easyocr_read})"
@@ -562,6 +650,10 @@ def _run_ensemble(img: np.ndarray) -> dict:
         "method":      f"ensemble[{agreeing}]",
         "all_candidates": all_candidates,
         "ensemble_decision": decision,
+        # The one case where the answer is not EasyOCR's even though EasyOCR read
+        # something. Always reviewed: see _MIN_TRAINED_VOTES_TO_OVERRIDE.
+        "overrode_easyocr": overrode_easyocr,
+        "easyocr_reading": easyocr_read or "",
         "raw_text":    (
             f"ensemble winner={winner} "
             f"({len(members)}/{len(scored)} valid engines agreed; {decision})"
@@ -580,17 +672,27 @@ def run_ocr(image_path: str) -> dict:
     img = _upscale(img, min_w=1400)
 
     # ── EasyOCR anchored by the trained models ────────────────────────────
-    # EasyOCR gets the full image (the user's crop is already tight around the
-    # digits, so cropping further would cut them off); _run_ensemble hands the
-    # trained models their own tight crop.
+    # EasyOCR gets the whole upload: the upload page's crop step frames the
+    # display with a margin around it, and cropping tighter here would hurt. A
+    # tight crop of the campus Aclara display read 00653 as 8865, while a loose
+    # crop of the same photo read it right at higher confidence than the full
+    # photo. _run_ensemble hands the trained models their own tight crop.
     ensemble = _run_ensemble(img)
     if ensemble["candidate"] and _valid(ensemble["candidate"]):
-        return ensemble
+        if ensemble["confidence"] >= MIN_USABLE_CONFIDENCE:
+            return ensemble
+        reason = (
+            f"best guess {ensemble['candidate']} at "
+            f"{ensemble['confidence']:.0%} is below the "
+            f"{MIN_USABLE_CONFIDENCE:.0%} floor"
+        )
+    else:
+        reason = ensemble["raw_text"]
 
     return {
         "candidate": "", "confidence": 0.0, "method": "none",
         "all_candidates": [],
-        "raw_text": f"no reading found ({ensemble['raw_text']})",
+        "raw_text": f"no reading found ({reason})",
         "ensemble_candidates": ensemble.get("ensemble_candidates", []),
     }
 
@@ -640,10 +742,13 @@ def ocr_health_check(_: User = Depends(get_current_user)):
             # Which trained checkpoints are installed; false ones are skipped by
             # the ensemble. See app/ocr_models/weights/README.md.
             "dtrb_variants_loaded": dtrb_loaded,
+            # finetuned.pth or the original best_accuracy.pth, per model.
+            "dtrb_weight_files":  _dtrb_weight_files(),
             "trained_models_installed": sum(dtrb_loaded.values()),
             "min_digits":        MIN_DIGITS,
             "max_digits":        MAX_DIGITS,
             "min_confidence":    MIN_RELIABLE_CONFIDENCE,
+            "min_usable_confidence": MIN_USABLE_CONFIDENCE,
             "watermark_strip":   "auto (blue-pixel detection)",
         }
     except HTTPException:
@@ -654,9 +759,10 @@ def ocr_health_check(_: User = Depends(get_current_user)):
 
 @router.post("/meter-photo")
 # Deliberately a plain `def`, not `async def`. Everything below is synchronous and
-# CPU-bound (disk write, 5 EasyOCR passes, 3 torch forward passes). FastAPI runs
-# `async def` handlers on the event loop, so an async version would freeze every
-# other request for the 5-20s this takes; a plain `def` gets the threadpool.
+# CPU-bound (disk write, EasyOCR detection + 5 recognition passes, 3 torch forward
+# passes). FastAPI runs `async def` handlers on the event loop, so an async version
+# would freeze every other request for the 10-60s this takes; a plain `def` gets
+# the threadpool.
 def read_meter_photo(
     file: UploadFile = File(...),
     _: User = Depends(require_admin_or_staff),
@@ -697,7 +803,16 @@ def read_meter_photo(
         if written == 0:
             raise HTTPException(400, "The uploaded file is empty.")
 
-        result      = run_ocr(str(saved_path))
+        if not _OCR_LOCK.acquire(timeout=OCR_QUEUE_WAIT_SECONDS):
+            raise HTTPException(
+                503,
+                "Another meter photo is still being read. Try again in a minute.",
+            )
+        try:
+            result = run_ocr(str(saved_path))
+        finally:
+            _OCR_LOCK.release()
+
         raw_reading = result["candidate"]
         confidence  = float(result["confidence"])
         conf_pct    = round(confidence * 100, 2)
@@ -730,12 +845,21 @@ def read_meter_photo(
         corrected, changed, corr_reason = _lcd_correct(raw_reading)
         low_conf  = confidence < MIN_RELIABLE_CONFIDENCE
         ambiguous = _ambiguous(raw_reading, confidence)
+        # Its confidence is the trained models' own, which runs high even when they
+        # are wrong, so it says nothing about whether the override was right.
+        overrode  = bool(result.get("overrode_easyocr"))
 
         reading_value = re.sub(r"[^0-9]", "", corrected)
 
-        needs_review = low_conf or ambiguous or changed
+        needs_review = low_conf or ambiguous or changed or overrode
 
         reasons: list[str] = []
+        if overrode:
+            reasons.append(
+                f"The trained models outvoted EasyOCR, which read "
+                f"{result.get('easyocr_reading') or 'something else'}. "
+                "Check the photo before saving."
+            )
         if changed:
             reasons.append(corr_reason)
         if ambiguous:
@@ -768,6 +892,7 @@ def read_meter_photo(
             # What each engine read, and which one the ensemble went with.
             "ensemble_candidates":     result.get("ensemble_candidates", []),
             "ensemble_decision":       result.get("ensemble_decision", ""),
+            "overrode_easyocr":        overrode,
             "review_reason":           " ".join(reasons),
             "minimum_reliable_confidence": MIN_RELIABLE_CONFIDENCE,
         }

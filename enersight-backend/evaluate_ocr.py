@@ -38,9 +38,12 @@ Outputs
 
 Metrics
 -------
-exact match      the whole reading is character-for-character correct. This is the
-                 number that matters operationally: a reading is either usable or
-                 it is not.
+exact match      the whole reading is character-for-character correct, leading
+                 zeros included.
+value correct    the reading is the right number: 09732 counts for a 0009732
+                 display. This is the number that matters operationally, because
+                 readings are stored as numbers, so dropped leading zeros cost
+                 nothing while any other wrong digit makes the reading unusable.
 char accuracy    1 - (edit distance / length of the true reading), averaged over
                  photos. Partial credit, and the metric the training notebook
                  reported, so it is the one comparable to the 91/84/82 figures.
@@ -99,6 +102,11 @@ def char_accuracy(truth: str, predicted: str) -> float:
     distance = levenshtein(truth, predicted)
 
     return max(0.0, 1.0 - (distance / len(truth)))
+
+
+def same_value(truth: str, predicted: str) -> bool:
+    """Whether the prediction is the right number, ignoring leading zeros."""
+    return bool(predicted) and int(predicted) == int(truth)
 
 
 def load_labels(labels_path: Path) -> list[tuple[str, str]]:
@@ -217,6 +225,7 @@ def main() -> int:
         lambda: {
             "n": 0,
             "exact": 0,
+            "value_ok": 0,
             "length_ok": 0,
             "char_acc_sum": 0.0,
             "conf_sum": 0.0,
@@ -241,7 +250,11 @@ def main() -> int:
             continue
 
         ensemble_digits = engines.get(ENSEMBLE_KEY, {}).get("digits", "")
-        verdict = "correct" if ensemble_digits == truth else "wrong"
+        verdict = (
+            "correct" if ensemble_digits == truth
+            else "right value" if same_value(truth, ensemble_digits)
+            else "wrong"
+        )
         print(
             f"  [{index}/{len(labels)}] {filename}: truth={truth} "
             f"ensemble={ensemble_digits or '(none)'} -> {verdict}"
@@ -252,18 +265,21 @@ def main() -> int:
         for key, engine in engines.items():
             predicted = engine["digits"]
             is_exact = predicted == truth
+            is_value = same_value(truth, predicted)
             accuracy = char_accuracy(truth, predicted)
 
             tally = tallies[key]
             tally["label"] = engine["label"]
             tally["n"] += 1
             tally["exact"] += int(is_exact)
+            tally["value_ok"] += int(is_value)
             tally["length_ok"] += int(len(predicted) == len(truth))
             tally["char_acc_sum"] += accuracy
             tally["conf_sum"] += engine["confidence"]
 
             row[f"{key}_pred"] = predicted
             row[f"{key}_exact"] = int(is_exact)
+            row[f"{key}_value_ok"] = int(is_value)
             row[f"{key}_char_acc"] = round(accuracy, 4)
             row[f"{key}_confidence"] = round(engine["confidence"], 4)
 
@@ -301,10 +317,12 @@ def main() -> int:
     ordered_keys = [ENSEMBLE_KEY] + sorted(k for k in tallies if k != ENSEMBLE_KEY)
 
     header = (
-        f"| {'Engine':24} | {'Exact match':>11} | {'Char accuracy':>13} "
-        f"| {'Length correct':>14} | {'Mean conf':>9} |"
+        f"| {'Engine':24} | {'Exact match':>11} | {'Value correct':>13} "
+        f"| {'Char accuracy':>13} | {'Length correct':>14} | {'Mean conf':>9} |"
     )
-    divider = f"|{'-' * 26}|{'-' * 13}|{'-' * 15}|{'-' * 16}|{'-' * 11}|"
+    divider = (
+        f"|{'-' * 26}|{'-' * 13}|{'-' * 15}|{'-' * 15}|{'-' * 16}|{'-' * 11}|"
+    )
 
     lines = [header, divider]
 
@@ -315,6 +333,7 @@ def main() -> int:
             continue
 
         exact_pct = 100.0 * tally["exact"] / tally["n"]
+        value_pct = 100.0 * tally["value_ok"] / tally["n"]
         char_pct = 100.0 * tally["char_acc_sum"] / tally["n"]
         length_pct = 100.0 * tally["length_ok"] / tally["n"]
         mean_conf = tally["conf_sum"] / tally["n"]
@@ -325,8 +344,8 @@ def main() -> int:
         label = tally["label"] if len(tally["label"]) <= 24 else key
 
         lines.append(
-            f"| {label:24} | {exact_pct:10.1f}% | {char_pct:12.1f}% "
-            f"| {length_pct:13.1f}% | {mean_conf:9.3f} |"
+            f"| {label:24} | {exact_pct:10.1f}% | {value_pct:12.1f}% "
+            f"| {char_pct:12.1f}% | {length_pct:13.1f}% | {mean_conf:9.3f} |"
         )
 
     n_scored = len(per_image_rows)
@@ -339,12 +358,13 @@ def main() -> int:
     if missing_files:
         print(f"\n{missing_files} labelled file(s) were not found in {images_dir}.")
 
-    # Confidence calibration for the shipped answer. The UI auto-marks a reading
-    # verified at >= 97% confidence, so it matters whether that threshold is honest.
-    buckets = [(0.97, 1.01), (0.90, 0.97), (0.75, 0.90), (0.0, 0.75)]
+    # Confidence calibration for the shipped answer. Below 70% the upload page
+    # flags a reading for review, so readings above it had better be right; if the
+    # high buckets show wrong values, confidence alone is not a safe signal.
+    buckets = [(0.97, 1.01), (0.90, 0.97), (0.70, 0.90), (0.0, 0.70)]
     calib_lines = [
-        f"| {'Ensemble confidence':22} | {'Photos':>6} | {'Exact match':>11} |",
-        f"|{'-' * 24}|{'-' * 8}|{'-' * 13}|",
+        f"| {'Ensemble confidence':22} | {'Photos':>6} | {'Value correct':>13} |",
+        f"|{'-' * 24}|{'-' * 8}|{'-' * 15}|",
     ]
 
     for low, high in buckets:
@@ -357,12 +377,12 @@ def main() -> int:
         if not in_bucket:
             continue
 
-        correct = sum(int(row.get(f"{ENSEMBLE_KEY}_exact", 0)) for row in in_bucket)
+        correct = sum(int(row.get(f"{ENSEMBLE_KEY}_value_ok", 0)) for row in in_bucket)
         label = f">= {low:.0%}" if high > 1.0 else f"{low:.0%} to {high:.0%}"
 
         calib_lines.append(
             f"| {label:22} | {len(in_bucket):6} | "
-            f"{100.0 * correct / len(in_bucket):10.1f}% |"
+            f"{100.0 * correct / len(in_bucket):12.1f}% |"
         )
 
     print("")

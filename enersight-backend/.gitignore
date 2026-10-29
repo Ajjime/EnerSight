@@ -45,6 +45,13 @@ meter_photos/
 # eval_data/ ARE tracked: they are the evidence behind the accuracy figures.
 eval_results/
 
+# Output of export_ocr_dataset.py: copies of uploaded meter photos, regenerated on
+# demand from the database. Copy the photos you want to keep into eval_data/.
+ocr_dataset/
+
+# Training runs from ocr_training/train.py: logs and multi-hundred-MB checkpoints.
+ocr_training/runs/
+
 # Trained OCR model weights (large binaries, see app/ocr_models/weights/README.md)
 *.pth
 

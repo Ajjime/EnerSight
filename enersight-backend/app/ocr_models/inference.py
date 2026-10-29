@@ -13,6 +13,10 @@ notebook on cropped kWh meter digit rows (character set = digits only):
 They act as supporting voters for EasyOCR in the ensemble that runs in
 routes/ocr.py; the accuracies above become their static trust weights there.
 
+Those accuracies are on the Roboflow test split. On the campus meters the original
+weights read 0% correctly, so each model can also have a finetuned.pth, trained
+from the original by ocr_training/ (see FINETUNED_NAME below).
+
 Weights are loaded lazily and cached (same pattern as the EasyOCR singleton in
 routes/ocr.py). A missing or unloadable checkpoint is never fatal: the variant is
 skipped and the ensemble runs with whatever voters are available.
@@ -117,9 +121,19 @@ _TO_TENSOR = transforms.Compose([
 
 # ── Loading ───────────────────────────────────────────────────────────────────
 
+# The original checkpoints were trained only on Roboflow photos of one meter style and
+# read the campus meters 0% correctly. finetuned.pth is the same model fine-tuned
+# from them on synthetic seven-segment displays plus the original crops (see the
+# weights README). It is used when present; delete it to go back to the original.
+FINETUNED_NAME = "finetuned.pth"
+
+
 def _weight_path(variant: DTRBVariant) -> Path:
     override = os.environ.get(variant.env_var, "").strip()
-    return Path(override) if override else variant.default_path
+    if override:
+        return Path(override)
+    finetuned = variant.default_path.with_name(FINETUNED_NAME)
+    return finetuned if finetuned.is_file() else variant.default_path
 
 
 def _build_opt(variant: DTRBVariant, num_class: int) -> argparse.Namespace:
@@ -180,18 +194,7 @@ def load_variant(key: str):
         return None
 
     try:
-        converter = (
-            AttnLabelConverter(CHARACTER) if variant.prediction == "Attn"
-            else CTCLabelConverter(CHARACTER)
-        )
-        opt = _build_opt(variant, num_class=len(converter.character))
-
-        model = Model(opt).to(_DEVICE)
-        state = torch.load(path, map_location=_DEVICE)
-        model.load_state_dict(_strip_data_parallel_prefix(state))
-        model.eval()
-
-        _loaded[key] = (model, converter, variant.prediction)
+        _loaded[key] = build_model(key, path)
         logger.info("DTRB variant %r loaded from %s on %s", key, path, _DEVICE)
         return _loaded[key]
     except Exception as exc:
@@ -203,6 +206,12 @@ def load_variant(key: str):
 def available_variants() -> dict[str, bool]:
     """{variant_key: is_loadable} — powers the /ocr/health report."""
     return {v.key: load_variant(v.key) is not None for v in VARIANTS}
+
+
+def weight_files() -> dict[str, str]:
+    """{variant_key: checkpoint file name in use}, so /ocr/health shows whether the
+    fine-tuned or the original weights are running."""
+    return {v.key: _weight_path(v).name for v in VARIANTS}
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
@@ -264,27 +273,49 @@ def predict(key: str, crop_bgr) -> tuple[str, float]:
     loaded = load_variant(key)
     if loaded is None:
         return "", 0.0
-    model, converter, prediction_type = loaded
 
     try:
-        pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
-        image = _TO_TENSOR(pil).unsqueeze(0).to(_DEVICE)
-
-        length_for_pred = torch.IntTensor([BATCH_MAX_LENGTH]).to(_DEVICE)
-        text_for_pred = torch.LongTensor(1, BATCH_MAX_LENGTH + 1).fill_(0).to(_DEVICE)
-
-        with torch.no_grad():
-            if prediction_type == "CTC":
-                preds = model(image, text_for_pred)
-                text, step_probs = _decode_ctc(preds, converter)
-            else:
-                preds = model(image, text_for_pred, is_train=False)
-                text, step_probs = _decode_attn(preds, converter, length_for_pred)
-
-        digits = re.sub(r"[^0-9]", "", text)
-        if not digits:
-            return "", 0.0
-        return digits, _confidence(step_probs)
+        return read_crop(loaded, crop_bgr)
     except Exception as exc:
         logger.error("DTRB variant %r inference failed: %s", key, exc)
         return "", 0.0
+
+
+def build_model(key: str, checkpoint: Path | None = None):
+    """(model, converter, prediction_type) for a variant, with the given checkpoint's
+    weights or untrained ones. Used by load_variant and by ocr_training/."""
+    variant = _VARIANT_BY_KEY[key]
+    converter = (
+        AttnLabelConverter(CHARACTER) if variant.prediction == "Attn"
+        else CTCLabelConverter(CHARACTER)
+    )
+    model = Model(_build_opt(variant, num_class=len(converter.character))).to(_DEVICE)
+    if checkpoint is not None:
+        state = torch.load(checkpoint, map_location=_DEVICE)
+        model.load_state_dict(_strip_data_parallel_prefix(state))
+    model.eval()
+    return model, converter, variant.prediction
+
+
+def read_crop(loaded, crop_bgr) -> tuple[str, float]:
+    """The reading itself, shared by predict() and ocr_training/ so the training
+    evaluation scores exactly what the running system would read. Raises on error."""
+    model, converter, prediction_type = loaded
+    pil = Image.fromarray(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+    image = _TO_TENSOR(pil).unsqueeze(0).to(_DEVICE)
+
+    length_for_pred = torch.IntTensor([BATCH_MAX_LENGTH]).to(_DEVICE)
+    text_for_pred = torch.LongTensor(1, BATCH_MAX_LENGTH + 1).fill_(0).to(_DEVICE)
+
+    with torch.no_grad():
+        if prediction_type == "CTC":
+            preds = model(image, text_for_pred)
+            text, step_probs = _decode_ctc(preds, converter)
+        else:
+            preds = model(image, text_for_pred, is_train=False)
+            text, step_probs = _decode_attn(preds, converter, length_for_pred)
+
+    digits = re.sub(r"[^0-9]", "", text)
+    if not digits:
+        return "", 0.0
+    return digits, _confidence(step_probs)
