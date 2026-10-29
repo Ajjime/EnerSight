@@ -1,0 +1,17 @@
+# The local virtualenvs are the big one: several GB of platform-specific wheels
+# that would be copied into the build context and then ignored.
+venv/
+venv312/
+__pycache__/
+*.pyc
+
+.env
+uploads/
+eval_data/
+eval_results/
+ocr_dataset/
+
+# Multi-gigabyte checkpoints (the weights and the fine-tuning runs), mounted at
+# runtime instead of baked in.
+**/*.pth
+ocr_training/runs/

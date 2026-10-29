@@ -1,0 +1,66 @@
+# EnerSight — database, API and web front end.
+#
+#   docker compose up --build
+#
+# The backend image carries PyTorch and is several gigabytes; the first build
+# takes a while and that is expected, not a hung step.
+#
+# Secrets come from the environment, never from this file. Create a .env beside it:
+#
+#   POSTGRES_PASSWORD=choose-something
+#   JWT_SECRET_KEY=paste-a-long-random-string
+#
+# Generate the JWT key with:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-enersight}
+      POSTGRES_USER: ${POSTGRES_USER:-enersight}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # The API calls create_all on startup, so it has to wait for a database
+      # that is actually accepting connections, not just a running container.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-enersight}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./enersight-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-enersight}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-enersight}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?set JWT_SECRET_KEY in .env}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      LOGIN_LOCKOUT_ATTEMPTS: ${LOGIN_LOCKOUT_ATTEMPTS:-5}
+      LOGIN_LOCKOUT_MINUTES: ${LOGIN_LOCKOUT_MINUTES:-15}
+    ports:
+      # Published on the host because the browser calls the API directly at
+      # http://<hostname>:8000 rather than through nginx (see src/config.js).
+      - "8000:8000"
+    volumes:
+      - uploads:/app/uploads
+      # Uncomment once the trained weights are downloaded; without them OCR runs
+      # on EasyOCR alone, which is supported. See install_ocr_weights.ps1.
+      # - ./enersight-backend/app/ocr_models/weights:/app/app/ocr_models/weights:ro
+
+  web:
+    build: ./enersight-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  uploads:
