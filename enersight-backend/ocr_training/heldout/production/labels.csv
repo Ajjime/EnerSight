@@ -1,0 +1,11 @@
+filename,true_reading,from_upload,easyocr_read
+00_campus_aclara.png,00653,aclara_loose,00653
+01_campus_aclara.png,00653,aclara_loose,00653
+02_campus_aclara.png,00653,aclara_lcd,0065
+03_campus_vision.png,11847,vision_loose,1847
+04_campus_vision.png,11847,vision_loose,784
+05_campus_vision.png,11847,vision_lcd,1847
+06_eval_1a052d10.png,087654,1a052d1089aa,087654
+07_eval_44db66f2.png,0009732,44db66f2bab4,09732
+08_campus_aclara_fullphoto.png,00653,0954eef9bba3,00653
+09_campus_vision_fullphoto.png,11847,4850b837e63d,1847
