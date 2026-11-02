@@ -13,7 +13,11 @@
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('engine:', d.get\\('ocr_engine'\\)\\)\")",
       "Read(//tmp/**)",
       "Bash(pkill -f uvicorn)",
-      "Bash(rm -f /c/capstone/EnerSight/enersight-backend/app/routes/__pycache__/ocr*.pyc)"
+      "Bash(rm -f /c/capstone/EnerSight/enersight-backend/app/routes/__pycache__/ocr*.pyc)",
+      "Bash(git rm *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(git add *)",
+      "Bash(git push *)"
     ]
   }
 }
