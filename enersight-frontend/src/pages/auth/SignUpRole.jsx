@@ -69,6 +69,7 @@ function PasswordMeter({ password }) {
 }
 import AuthShell from "../../components/ui/AuthShell";
 import { FormField } from "../../components/ui/EnergyUI";
+import { SERVER_UNREACHABLE } from "../../utils/messages";
 
 const roleOptions = [
   {
@@ -167,7 +168,7 @@ const SignUpRole = ({ onBack }) => {
     } catch (error) {
       console.error("Sign up error:", error);
       setErrorMessage(
-        "Cannot connect to server. Please make sure FastAPI is running."
+        SERVER_UNREACHABLE
       );
     } finally {
       setIsLoading(false);

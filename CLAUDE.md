@@ -169,6 +169,17 @@ LocationPickerModal and UploadOCR.
   (variants `empty`, `filtered`, `blocked`) and `SkeletonRows`. Each table keeps a
   `*_ROW_COLUMNS` grid-template string that mirrors its `grid-cols-[...]` class; update
   both together.
+- **Less text (user's request, Nov 2026: too many words were confusing).** `PageHeader`
+  is icon, title, "Updated" time and buttons only: no label above the title, no
+  subtitle, no count badges. Show a number in one place per page. Put explanations
+  behind an `InfoHint` (`utils/glossary.js`), not in paragraphs or footnotes. Error
+  toasts use `utils/messages.js` (`SERVER_UNREACHABLE`, `describeError`), never
+  "make sure FastAPI is running". An unverified reading is labelled "Needs Review"
+  everywhere. The Analytics method-comparison table stays open (Objective 2).
+- Sample data (Load / Remove) is an Admin-only panel in Settings
+  (`components/SampleDataPanel.jsx`), not buttons on Buildings and Meters. Its list,
+  `utils/sampleData.js`, mirrors `DEMO_BUILDINGS` in `seed_demo_data.py`;
+  `sampleData.test.js` reads that file and fails if they drift.
 - Plus Jakarta Sans; weights 400/500/600/700 (no `font-black`); radii `rounded-2xl`,
   `rounded-xl`, `rounded-full`; shadows `shadow-sm`, `shadow-md`, `shadow-xl`.
 - The GIS map uses OSM tiles muted by the `.energy-street-tiles` CSS filter. Don't switch

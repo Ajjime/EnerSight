@@ -81,6 +81,7 @@ import {
   isInWindow,
   isInvalidCustomRange,
 } from "../utils/periods";
+import { describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 const DAYS_PER_MONTH = 365 / 12;
 
@@ -206,53 +207,51 @@ function formatEui(row) {
 
 function getRecommendation(row) {
   if (row.status === "Critical")
-    return "Immediate review recommended. Check equipment usage, schedule, and meter readings.";
+    return "Check equipment and operating hours first.";
   if (row.status === "High")
-    return "Monitor this building closely and compare with previous readings.";
+    return "Watch its next readings.";
   if (row.status === "No Data")
     return row.floorArea > 0
-      ? "No consumption recorded in this period."
-      : "Add this building's floor area on the Buildings page so its energy intensity can be graded.";
+      ? "No readings in this period."
+      : "Add its floor area on the Buildings page.";
   if (row.lowAccuracyCount > 0)
-    return `${row.lowAccuracyCount} photo reading${row.lowAccuracyCount === 1 ? "" : "s"} scored below 90%. Re-check those photos before reporting.`;
+    return `${row.lowAccuracyCount} photo reading${row.lowAccuracyCount === 1 ? "" : "s"} below 90%. Re-check ${row.lowAccuracyCount === 1 ? "it" : "them"}.`;
   if (row.pendingCount > 0)
-    return "Some readings still need manual verification.";
-  return "Consumption and reading quality are within normal monitoring range.";
+    return "Some readings need review.";
+  return "Within the normal range.";
 }
 
 function getApplianceVerdict(row) {
   if (row.applianceKwhMonth === null) {
-    return { text: "No appliance list for this building yet.", badge: null };
+    return { text: "No appliance list yet.", badge: null };
   }
   if (row.applianceKwhMonth <= 0) {
     return {
-      text: "The appliance list adds up to 0 kWh. Check the wattage and hours entered.",
+      text: "The appliance list adds up to 0 kWh.",
       badge: null,
     };
   }
   if (row.monthlyConsumption === null) {
     return {
-      text: "Not enough readings in this period to work out a monthly figure.",
+      text: "Not enough readings in this period.",
       badge: null,
     };
   }
 
-  const percent = formatPercent(Math.abs(row.gap));
-
   if (row.gap > APPLIANCE_GAP_TOLERANCE) {
     return {
-      text: `Uses ${percent} more than its appliances explain. Look for unlisted equipment, longer operating hours, or waste.`,
+      text: "More than its appliances explain.",
       badge: row.gap > 0.5 ? "border-red-100 bg-red-50 text-red-700" : "border-amber-100 bg-amber-50 text-amber-700",
     };
   }
   if (row.gap < -APPLIANCE_GAP_TOLERANCE) {
     return {
-      text: `Uses ${percent} less than estimated. The listed hours or quantities may be too high.`,
+      text: "Less than its appliance list predicts.",
       badge: "border-blue-100 bg-blue-50 text-blue-700",
     };
   }
   return {
-    text: "Measured use matches the appliance list within 15%.",
+    text: "Matches its appliance list.",
     badge: "border-emerald-100 bg-emerald-50 text-emerald-700",
   };
 }
@@ -639,7 +638,7 @@ const Analytics = () => {
     } catch (error) {
       console.error("Analytics refresh error:", error);
       setErrorMessage(
-        error.message || "Cannot connect to server. Please make sure FastAPI is running."
+        describeError(error)
       );
     } finally {
       setIsLoading(false);
@@ -942,13 +941,6 @@ const Analytics = () => {
   const isLevelForecast =
     forecastLevels.length > 1 &&
     forecastLevels.every((value) => value === levelValue);
-  const otherMethodLevels = forecastModel
-    ? forecastModel.methods
-        .filter(
-          (entry) => entry.available && entry.key !== forecastModel.bestKey
-        )
-        .map((entry) => ({ label: entry.label, value: entry.projection[0] }))
-    : [];
   const forecastDirection = getForecastDirection(forecastModel).label;
   const ForecastIcon =
     forecastDirection === "Rising" ? TrendingUp : forecastDirection === "Falling" ? TrendingDown : Minus;
@@ -1023,14 +1015,10 @@ const Analytics = () => {
       `}</style>
 
       <PageHeader
-        eyebrow="Energy Analytics"
         title="Analytics"
-        subtitle="Analyze consumption trends and building performance."
         icon={BarChart3}
-        status={isLoading ? "Syncing data" : `${filteredReadings.length} Records`}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoading}
-        intervalMs={AUTO_REFRESH_MS}
       />
 
       <RateNotice isFallback={isRateFallback} error={rateError} />
@@ -1370,11 +1358,10 @@ const Analytics = () => {
         style={{ animation: "analyticsCardIn 420ms ease-out 360ms both" }}
       >
         <div className="mb-5">
-          <h2 className="text-lg font-semibold text-slate-950">Reading Quality</h2>
-          <p className="mt-0.5 text-xs font-normal text-slate-400">
-            Verification progress and OCR accuracy for the selected records. Typed-in
-            readings have no OCR score and are counted separately.
-          </p>
+          <h2 className="flex items-center gap-1.5 text-lg font-semibold text-slate-950">
+            Reading Quality
+            <InfoHint term="ocrAccuracy" />
+          </h2>
         </div>
 
         <div className="flex flex-col items-center gap-6 lg:flex-row lg:items-center lg:gap-10">
@@ -1421,7 +1408,7 @@ const Analytics = () => {
               </p>
               <div className="mt-1 divide-y divide-slate-100">
                 <QualityCountRow color="#10B981" label="Verified" count={verifiedCount} />
-                <QualityCountRow color="#F59E0B" label="Needs review" count={pendingCount} />
+                <QualityCountRow color="#F59E0B" label="Needs Review" count={pendingCount} />
               </div>
               {totalQualityReadings > 0 && (
                 <div className="mt-3">
@@ -1479,9 +1466,6 @@ const Analytics = () => {
                 : "Forecast"}
             </div>
             <h2 className="text-lg font-semibold text-slate-950">Energy Forecast</h2>
-            <p className="text-xs font-normal text-slate-400">
-              Predicted usage and cost based on saved meter readings.
-            </p>
           </div>
           <SegmentedControl
             label="Forecast horizon"
@@ -1504,34 +1488,15 @@ const Analytics = () => {
               <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 Leading estimate
               </p>
-              <p className="mt-1 text-sm font-semibold text-slate-950">{bestMethod.label}</p>
+              <p className="mt-1 flex items-center gap-1.5 text-sm font-semibold text-slate-950">
+                {bestMethod.label}
+                <InfoHint term="forecastMethods" />
+              </p>
               <p className="mt-1 text-xs leading-5 text-slate-500">
                 {bestMethod.error !== null
-                  ? `Picked because it came closest in a back-test: forecasting the last ${forecastModel.testedMonths} month${forecastModel.testedMonths === 1 ? "" : "s"} from the months before them, it was off by ${formatPercent(bestMethod.error)} on average.`
-                  : "There is not enough history yet to test the estimates against real months, so the moving average leads by default."}
+                  ? `Most accurate on your past readings: off by ${formatPercent(bestMethod.error)} on average.`
+                  : "Not enough history to test the methods yet, so the moving average leads."}
               </p>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {forecastModel.methods.map((method) => (
-                  <span
-                    key={method.key}
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
-                      method.key === forecastModel.bestKey
-                        ? "border-emerald-200 bg-white text-slate-800"
-                        : "border-slate-200 bg-white text-slate-500"
-                    }`}
-                  >
-                    <span className="h-2 w-2 rounded-full" style={{ background: FORECAST_COLORS[method.key] }} />
-                    {method.label}
-                    <span className="text-slate-400">
-                      {!method.available
-                        ? `needs ${method.minMonths}+ months`
-                        : method.error === null
-                        ? `needs ${method.minMonths + 1}+ months to test`
-                        : `off by ${formatPercent(method.error)}`}
-                    </span>
-                  </span>
-                ))}
-              </div>
             </div>
 
             {/* The comparison the study is built on: every estimator scored on the
@@ -1624,9 +1589,7 @@ const Analytics = () => {
               })}
 
               <p className="border-t border-slate-100 bg-slate-50 px-4 py-2.5 text-xs font-normal leading-5 text-slate-500">
-                Each method predicted months that had already happened, using only the
-                months before them. Lower is better for the first three columns; higher
-                is better for the fit score. Hover any column heading for what it means.
+                Lower is better, except R², where higher is better.
               </p>
             </details>
             {/* All three estimators project a level, so every month of the horizon
@@ -1663,21 +1626,9 @@ const Analytics = () => {
                 </p>
 
                 <p className="mt-3 flex items-start gap-1.5 border-t border-emerald-100 pt-3 text-xs font-normal leading-5 text-slate-500">
-                  <span>
-                    Every month carries the same figure because these methods
-                    estimate a level, not a direction. Read it as consumption
-                    holding around here.
-                  </span>
+                  <span>The same figure every month.</span>
                   <InfoHint term="levelForecast" align="right" />
                 </p>
-
-                {otherMethodLevels.length > 0 && (
-                  <p className="mt-2 text-[11px] font-normal text-slate-400">
-                    {otherMethodLevels
-                      .map((method) => `${method.label}: ${formatNumber(method.value)}`)
-                      .join(" · ")}
-                  </p>
-                )}
               </div>
             ) : (
               <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
@@ -1713,13 +1664,6 @@ const Analytics = () => {
             <ForecastLegend model={forecastModel} className="mb-3" />
 
             <ForecastChart model={forecastModel} className="h-56" gradientId="analyticsForecastBar" />
-
-            <p className="mt-3 text-[10px] font-normal leading-4 text-slate-400">
-              Moving average: mean of the last 3 months. Weighted moving average: the same
-              3 months, with the newest weighted heaviest. Simple exponential smoothing:
-              every past month folded into one level, recent months counting for more.
-              Costs use {formatPeso(rate)} per kWh.
-            </p>
           </>
         )}
       </section>
@@ -1736,7 +1680,7 @@ const Analytics = () => {
           <div>
             <h2 className="text-lg font-semibold text-slate-950">Priority Insights</h2>
             <p className="text-xs font-normal text-slate-400">
-              Buildings to look at first: worst energy status, then highest energy intensity.
+              Buildings to look at first.
             </p>
           </div>
         </div>
@@ -1793,11 +1737,14 @@ const Analytics = () => {
             <Plug size={20} />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-slate-950">Measured vs Appliance Estimate</h2>
-            <p className="text-xs font-normal text-slate-400">
-              What each meter recorded per month, next to what the building&apos;s appliance
-              list says it should use.
-            </p>
+            <h2 className="flex items-center gap-1.5 text-lg font-semibold text-slate-950">
+              Measured vs Appliance Estimate
+              <InfoHint
+                label="Measured vs appliance estimate"
+                text={`Measured: meter use in this period, scaled to an average month. Estimate: watts × quantity × hours per day × days per month ÷ 1000 over the appliance list. A gap over ${formatPercent(APPLIANCE_GAP_TOLERANCE)} is flagged: more than the list explains points to unlisted equipment, longer hours or waste; less suggests the listed hours or quantities are too high.`}
+              />
+            </h2>
+            <p className="text-xs font-normal text-slate-400">Per month, for each building.</p>
           </div>
         </div>
 
@@ -1844,12 +1791,6 @@ const Analytics = () => {
                 );
               })}
             </div>
-            <p className="mt-3 text-[10px] leading-4 text-slate-400">
-              Estimate: watts × quantity × hours per day × days per month ÷ 1000, summed
-              over the building&apos;s appliance list. Measured: meter consumption in the
-              selected period, scaled to an average month. Differences over{" "}
-              {formatPercent(APPLIANCE_GAP_TOLERANCE)} are flagged.
-            </p>
           </>
         )}
       </section>
@@ -1863,15 +1804,10 @@ const Analytics = () => {
           <div>
             <h2 className="text-lg font-semibold text-slate-950">Building Analytics Table</h2>
             <p className="mt-0.5 text-xs font-normal text-slate-400">
-              Consumption, energy intensity, OCR accuracy, and verification. Click a column
-              to sort, or a building for its full profile.
+              Click a column to sort, or a building to open its profile.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700">
-              <BarChart3 size={14} />
-              {buildingAnalytics.length} buildings shown
-            </div>
             <button
               type="button"
               onClick={exportTableCsv}
@@ -1971,9 +1907,8 @@ const Analytics = () => {
         </div>
 
         <p className="mt-3 text-[10px] leading-4 text-slate-400">
-          EUI is kWh per m² per year. * Readings cover under {MIN_DAYS_TO_ANNUALIZE} days, so
-          the figure is for the period only. Per month scales the period&apos;s consumption to
-          an average month.
+          EUI is kWh per m² per year. * Under {MIN_DAYS_TO_ANNUALIZE} days of readings, so
+          not annualised.
         </p>
       </section>
 

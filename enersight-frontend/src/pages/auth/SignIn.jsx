@@ -14,6 +14,7 @@ import {
 import AuthShell from "../../components/ui/AuthShell";
 import { FormField } from "../../components/ui/EnergyUI";
 import { clearSavedLogin, resetSessionExpiryGuard } from "../../utils/session";
+import { SERVER_UNREACHABLE } from "../../utils/messages";
 
 const SignIn = ({ onLogin, onSignUp, onForgot, notice = "" }) => {
   const [username, setUsername] = useState("");
@@ -74,7 +75,7 @@ const SignIn = ({ onLogin, onSignUp, onForgot, notice = "" }) => {
       console.error("Login error:", error);
       clearSavedLogin();
       setErrorMessage(
-        "Cannot connect to server. Please make sure FastAPI is running."
+        SERVER_UNREACHABLE
       );
     } finally {
       setIsLoading(false);

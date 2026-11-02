@@ -1,8 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
-  Building2,
-  CheckCircle2,
   ClipboardCheck,
   ClipboardList,
   Download,
@@ -44,7 +41,7 @@ import {
   getOcrScore,
   isLowOcrAccuracy,
 } from "../utils/readingQuality";
-import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
+import { formatPeso } from "../utils/currency";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import InfoHint from "../components/InfoHint";
@@ -56,15 +53,9 @@ import {
   isInWindow,
   isInvalidCustomRange,
 } from "../utils/periods";
+import { describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 const DAYS_PER_MONTH = 365 / 12;
-
-const reportTypes = [
-  "Monthly Building Report",
-  "High Energy Use Report",
-  "Meter Photo Check Report",
-  "Audit Support Report",
-];
 
 function normalizeBuilding(building) {
   return {
@@ -574,7 +565,7 @@ function PrintTemplate({
                         ...badgeStyle(row.is_verified ? "green" : "amber"),
                       }}
                     >
-                      {row.is_verified ? "Verified" : "Pending"}
+                      {row.is_verified ? "Verified" : "Needs Review"}
                     </span>
                   </td>
                 </tr>
@@ -610,6 +601,8 @@ function PrintTemplate({
 }
 
 // Kept next to each real row's grid-cols-[...] class so the two stay in step.
+const AUDIT_PAGE_SIZE = 20;
+
 const REPORT_ROW_COLUMNS = "1.3fr 0.6fr 0.7fr 1fr 1fr 1fr 1fr 0.9fr 0.9fr";
 
 // Mirrors the grid-template on the saved-report rows.
@@ -787,8 +780,7 @@ const Reports = () => {
     } catch (error) {
       console.error("Reports refresh error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -860,7 +852,6 @@ const Reports = () => {
     (reading) => !reading.is_verified
   ).length;
 
-  const lowAccuracyCount = filteredReadings.filter(isLowOcrAccuracy).length;
 
   const buildingReportRows = useMemo(() => {
     return buildings
@@ -978,6 +969,32 @@ const Reports = () => {
       (a, b) => new Date(b.reading_date) - new Date(a.reading_date)
     );
   }, [filteredReadings, buildingReportRows, reportType, metersById]);
+
+  // The on-screen audit trail used to list every reading at once (126 rows on
+  // the demo data). It is paged now; the printout still lists them all. The page
+  // is stored with the filters it belongs to, so changing any filter goes back
+  // to page 1.
+  const auditFilterKey = [reportType, buildingFilter, periodLabel, query].join("|");
+  const [auditPaging, setAuditPaging] = useState({ key: "", page: 1 });
+  const auditTotalPages = Math.max(
+    1,
+    Math.ceil(reportFilteredReadings.length / AUDIT_PAGE_SIZE)
+  );
+  const auditPage =
+    auditPaging.key === auditFilterKey
+      ? Math.min(auditPaging.page, auditTotalPages)
+      : 1;
+  const pagedAuditReadings = reportFilteredReadings.slice(
+    (auditPage - 1) * AUDIT_PAGE_SIZE,
+    auditPage * AUDIT_PAGE_SIZE
+  );
+
+  function goToAuditPage(page) {
+    setAuditPaging({
+      key: auditFilterKey,
+      page: Math.max(1, Math.min(auditTotalPages, page)),
+    });
+  }
 
   // Flattened for the printout. The Audit Support Report is precisely the evidence
   // a reader needs on paper, yet the audit table was print:hidden and never made it
@@ -1179,14 +1196,10 @@ const Reports = () => {
 
       <div className="print:hidden">
         <PageHeader
-          eyebrow="Energy Reports"
           title="Reports & Audit Support"
-          subtitle="Generate and review energy consumption reports."
           icon={FileText}
-          status={isLoading ? "Syncing data" : `${filteredReadings.length} Records`}
           lastUpdated={lastUpdated}
           isRefreshing={isAutoRefreshing || isLoading}
-          intervalMs={AUTO_REFRESH_MS}
           actions={
             <>
               {/* These three used to be hand-rolled with dark-header styling
@@ -1232,20 +1245,50 @@ const Reports = () => {
         className="print:hidden"
       />
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr_1.4fr]">
-          <select
-            value={reportType}
-            onChange={(event) => setReportType(event.target.value)}
-            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-700 outline-none transition focus:border-emerald-600 focus:bg-white"
-          >
-            {reportTypes.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
+      {/* Choosing the report comes first. There used to be a report-type
+          dropdown in the filter bar as well, doing the same thing as these cards. */}
+      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 print:hidden">
+        {reportCards.map((card) => {
+          const Icon = card.icon;
+          const isActive = reportType === card.title;
 
+          return (
+            <button
+              key={card.title}
+              type="button"
+              onClick={card.action}
+              className={`rounded-2xl border p-5 text-left shadow-sm transition ${
+                isActive
+                  ? "border-emerald-200 bg-emerald-50"
+                  : "border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50"
+              }`}
+            >
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
+                  <Icon size={23} />
+                </div>
+
+                {isActive && (
+                  <span className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-700">
+                    Selected
+                  </span>
+                )}
+              </div>
+
+              <h3 className="text-base font-semibold text-slate-950">
+                {card.title}
+              </h3>
+
+              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">
+                {card.description}
+              </p>
+            </button>
+          );
+        })}
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_1.4fr]">
           <select
             value={buildingFilter}
             onChange={(event) => setBuildingFilter(event.target.value)}
@@ -1323,7 +1366,7 @@ const Reports = () => {
         )}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 print:hidden">
+      <section className="grid gap-4 md:grid-cols-3 print:hidden">
         <StatCard
           title="Total Energy Used"
           hint="measuredVsEstimated"
@@ -1353,111 +1396,6 @@ const Reports = () => {
           description="Peak reading in selected data"
         />
 
-        <StatCard
-          title="Needs Review"
-          hint="needsReview"
-          value={pendingCount}
-          icon={AlertTriangle}
-          tone="amber"
-          description={`${verifiedCount} verified, ${lowAccuracyCount} low accuracy`}
-        />
-      </section>
-
-      {/* Report scope — moved off the Dashboard, where it only repeated counts
-          the overview cards already showed. Here it states which records a
-          generated report is actually built from. */}
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm print:hidden">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-start gap-3">
-            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-              <ClipboardCheck size={21} />
-            </div>
-
-            <div>
-              <h2 className="text-lg font-semibold text-slate-950">
-                Report Scope
-              </h2>
-
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Reports are built from the saved readings, buildings, and meter
-                assignments below.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 sm:shrink-0">
-            <div className="px-2 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                Readings
-              </p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">
-                {readings.length}
-              </p>
-            </div>
-
-            <div className="px-2 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                Buildings
-              </p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">
-                {buildings.length}
-              </p>
-            </div>
-
-            <div className="px-2 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                Meters
-              </p>
-              <p className="mt-1 text-xl font-semibold text-slate-950">
-                {meters.length}
-              </p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-4 print:hidden">
-        {reportCards.map((card) => {
-          const Icon = card.icon;
-          const isActive = reportType === card.title;
-
-          return (
-            <button
-              key={card.title}
-              type="button"
-              onClick={card.action}
-              className={`rounded-2xl border p-5 text-left shadow-sm transition ${
-                isActive
-                  ? "border-emerald-200 bg-emerald-50"
-                  : "border-slate-200 bg-white hover:border-emerald-200 hover:bg-emerald-50"
-              }`}
-            >
-              <div className="mb-4 flex items-start justify-between gap-3">
-                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-                  <Icon size={23} />
-                </div>
-
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                    isActive
-                      ? "border-emerald-200 bg-white text-emerald-700"
-                      : "border-slate-100 bg-slate-50 text-slate-500"
-                  }`}
-                >
-                  {isActive ? "Selected" : "Ready"}
-                </span>
-              </div>
-
-              <h3 className="text-base font-semibold text-slate-950">
-                {card.title}
-              </h3>
-
-              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">
-                {card.description}
-              </p>
-            </button>
-          );
-        })}
       </section>
 
       {/* The audit trail the paper's ERD describes: not a second reporting engine,
@@ -1468,9 +1406,6 @@ const Reports = () => {
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-slate-950">Saved Reports</h2>
-            <p className="mt-1 text-sm font-normal text-slate-400">
-              Snapshots kept for audit support.
-            </p>
           </div>
 
           <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-500">
@@ -1540,17 +1475,14 @@ const Reports = () => {
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">
-              Generated Report Preview
+              {reportType}
             </h2>
             <p className="mt-1 text-sm font-normal text-slate-500">
-              {reportType} • {buildingFilter} • {periodLabel}
+              {buildingFilter} · {periodLabel}
             </p>
           </div>
 
           <div className="flex flex-col items-end gap-2">
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-              Generated: {formatDateTime(new Date().toISOString())}
-            </div>
             {REPORT_CONTEXT[reportType] && (
               <p className={`text-xs font-normal ${
                 REPORT_CONTEXT[reportType].color === "red"
@@ -1568,7 +1500,7 @@ const Reports = () => {
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[1200px]">
+          <div className="min-w-[980px]">
             <div className="grid grid-cols-[1.3fr_0.6fr_0.7fr_1fr_1fr_1fr_1fr_0.9fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Building</div>
               <div>Meters</div>
@@ -1691,13 +1623,13 @@ const Reports = () => {
               Reading Audit Trail
             </h2>
             <p className="mt-1 text-sm font-normal text-slate-500">
-              Source records included in the selected report period.
+              The readings behind this report.
             </p>
           </div>
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[1080px]">
+          <div className="min-w-[980px]">
             <div className="grid grid-cols-[90px_1.1fr_1.1fr_1fr_1fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Building</div>
@@ -1735,7 +1667,7 @@ const Reports = () => {
               />
             ) : (
               <div className="divide-y divide-slate-100">
-                {reportFilteredReadings.map((reading) => {
+                {pagedAuditReadings.map((reading) => {
                   const meter = getMeter(reading.meter_id);
                   const buildingName = getMeterBuildingName(reading.meter_id);
 
@@ -1790,6 +1722,40 @@ const Reports = () => {
             )}
           </div>
         </div>
+
+        {auditTotalPages > 1 && (
+          <div className="mt-4 flex items-center justify-between gap-4">
+            <p className="text-xs font-normal text-slate-400">
+              Showing {(auditPage - 1) * AUDIT_PAGE_SIZE + 1}–
+              {Math.min(auditPage * AUDIT_PAGE_SIZE, reportFilteredReadings.length)} of{" "}
+              {reportFilteredReadings.length} readings
+            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => goToAuditPage(auditPage - 1)}
+                disabled={auditPage === 1}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Previous
+              </button>
+
+              <span className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-medium text-white">
+                {auditPage} / {auditTotalPages}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => goToAuditPage(auditPage + 1)}
+                disabled={auditPage === auditTotalPages}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <PrintTemplate

@@ -116,7 +116,7 @@ export default function MeterReadingHistory({ rows, draft, onViewAll }) {
                   </td>
                   <td className={CELL_CLASS}>
                     <StatusPill tone={row.reading.is_verified ? "verified" : "review"}>
-                      {row.reading.is_verified ? "Verified" : "Review"}
+                      {row.reading.is_verified ? "Verified" : "Needs Review"}
                     </StatusPill>
                   </td>
                 </tr>

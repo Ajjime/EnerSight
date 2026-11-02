@@ -41,6 +41,7 @@ import {
   getNextMeterToRead,
   getRecentMonths,
 } from "../utils/meterRounds";
+import { SERVER_UNREACHABLE, describeError } from "../utils/messages";
 
 // How many months the reading-period picker offers, the current one first.
 const PERIOD_MONTHS = 6;
@@ -594,8 +595,7 @@ const UploadOCR = () => {
     } catch (error) {
       console.error("OCR data refresh error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -1065,7 +1065,7 @@ const UploadOCR = () => {
 
       console.error("OCR request error:", error);
       showToast(
-        "Cannot connect to OCR endpoint. Please make sure FastAPI is running.",
+        "Can't reach the server to read the photo. Try again, or type the reading.",
         "error"
       );
     } finally {
@@ -1140,7 +1140,7 @@ const UploadOCR = () => {
     } catch (error) {
       console.error("Save reading error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1217,7 +1217,7 @@ const UploadOCR = () => {
     } catch (error) {
       console.error("Delete reading error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1283,7 +1283,7 @@ const UploadOCR = () => {
     } catch (error) {
       console.error("Update verification error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1327,14 +1327,10 @@ const UploadOCR = () => {
       />
 
       <PageHeader
-        eyebrow="Smart Meter Scanner"
         title="Meter Reading OCR"
-        subtitle="Capture this period's readings meter by meter."
         icon={ScanLine}
-        status={isLoadingData ? "Syncing data" : null}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoadingData}
-        intervalMs={AUTO_REFRESH_MS}
         actions={
           <label className="inline-flex items-center gap-2 text-[13px] font-medium text-slate-600">
             Reading period
@@ -1889,9 +1885,6 @@ const UploadOCR = () => {
             <h2 className="text-xl font-semibold text-slate-950">
               Latest Readings
             </h2>
-            <p className="mt-1 text-sm font-normal text-slate-500">
-              Review saved OCR and manual readings.
-            </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_170px] xl:w-[620px]">
@@ -1918,7 +1911,7 @@ const UploadOCR = () => {
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[1120px]">
+          <div className="min-w-[980px]">
             <div className="grid grid-cols-[90px_1.2fr_1.1fr_1fr_130px_180px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>ID</div>
               <div>Meter / Building</div>
@@ -1992,7 +1985,7 @@ const UploadOCR = () => {
                             reading.is_verified
                           )}`}
                         >
-                          {reading.is_verified ? "Verified" : "Review"}
+                          {reading.is_verified ? "Verified" : "Needs Review"}
                         </span>
                       </div>
 

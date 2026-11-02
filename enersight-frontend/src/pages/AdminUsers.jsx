@@ -33,6 +33,7 @@ import {
   getRoleLabel,
   getShortRoleLabel,
 } from "../utils/roles";
+import { SERVER_UNREACHABLE, describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 
 // No email field: the User model has no email column (see models.py), so anything
@@ -320,8 +321,7 @@ const AdminUsers = () => {
     } catch (error) {
       console.error("Fetch users error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -515,7 +515,7 @@ const AdminUsers = () => {
     } catch (error) {
       console.error("Save user error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -588,7 +588,7 @@ const AdminUsers = () => {
     } catch (error) {
       console.error(`${action} user error:`, error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     }
@@ -630,7 +630,7 @@ const AdminUsers = () => {
     } catch (error) {
       console.error("Delete user error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -694,14 +694,10 @@ const AdminUsers = () => {
       />
 
       <PageHeader
-        eyebrow="Access Control"
         title="User Management"
-        subtitle="Manage user accounts, roles, and pending requests."
         icon={UserCog}
-        status={isLoading ? "Syncing data" : `${pendingUsers.length} Pending`}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoading}
-        intervalMs={AUTO_REFRESH_MS}
         actions={
           <HeaderActionButton icon={Plus} variant="dark" onClick={openAddModal}>
             Add User

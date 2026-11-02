@@ -8,13 +8,11 @@ import {
   Map as MapIcon,
   MapPinned,
   Minus,
-  Navigation,
   Plus,
   Satellite,
   Scan,
   Search,
   X,
-  Zap,
 } from "lucide-react";
 import { MapContainer, Marker, TileLayer, Tooltip } from "react-leaflet";
 import L from "leaflet";
@@ -22,7 +20,6 @@ import "leaflet/dist/leaflet.css";
 
 import PageHeader from "../components/PageHeader";
 import HeaderActionButton from "../components/HeaderActionButton";
-import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import InfoHint from "../components/InfoHint";
 import EnergyHeatLayer from "../components/EnergyHeatLayer";
@@ -40,6 +37,7 @@ import {
   computeEui,
   getEnergyStatus,
 } from "../utils/energyStatus";
+import { describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 30000;
 
 // Everything about one building (meters, readings, monthly trend, appliances).
@@ -484,7 +482,7 @@ function ToastMessage({ toast, onClose }) {
 }
 
 // Kept next to the real row's grid-cols-[...] class so the two stay in step.
-const MAP_ROW_COLUMNS = "1.2fr 0.9fr 0.9fr 1fr 0.9fr 1fr 0.9fr";
+const MAP_ROW_COLUMNS = "1.4fr 1fr 0.9fr 1fr 0.6fr 0.8fr";
 
 export default function BuildingMap() {
   const [buildings, setBuildings] = useState([]);
@@ -668,8 +666,7 @@ export default function BuildingMap() {
     } catch (error) {
       console.error("GIS map refresh error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -798,23 +795,6 @@ export default function BuildingMap() {
     }
   }
 
-  const normalCount = buildings.filter(
-    (building) => building.energy_status === "Normal"
-  ).length;
-
-  const highCount = buildings.filter(
-    (building) => building.energy_status === "High"
-  ).length;
-
-  const criticalCount = buildings.filter(
-    (building) => building.energy_status === "Critical"
-  ).length;
-
-  const averageEui = buildings.length
-    ? buildings.reduce((sum, building) => sum + Number(building.eui || 0), 0) /
-      buildings.length
-    : 0;
-
   const tileLayer = BASE_LAYERS[baseLayer];
 
   return (
@@ -822,67 +802,11 @@ export default function BuildingMap() {
       <ToastMessage toast={toast} onClose={hideToast} />
 
       <PageHeader
-        eyebrow="GIS Energy Map"
         title="Building Energy Map"
-        subtitle="View building locations and EUI-based energy status."
         icon={MapPinned}
-        status={isLoading ? "Syncing map data" : `${filteredBuildings.length} Visible`}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoading}
-        intervalMs={AUTO_REFRESH_MS}
-        actions={
-          <>
-            <HeaderActionButton
-              icon={Eye}
-              onClick={() => activeBuilding && setDetailsBuilding(activeBuilding)}
-              disabled={!activeBuilding}
-            >
-              View Selected
-            </HeaderActionButton>
-
-            <HeaderActionButton icon={Navigation}>
-              {buildingsWithCoordinates.length} Mapped
-            </HeaderActionButton>
-
-            <HeaderActionButton icon={Zap} variant="dark">
-              Avg intensity {formatDecimal(averageEui)}
-            </HeaderActionButton>
-          </>
-        }
       />
-
-      <section className="relative z-0 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Mapped Buildings"
-          value={buildingsWithCoordinates.length}
-          icon={MapPinned}
-          description="Buildings with valid coordinates"
-        />
-
-        <StatCard
-          title="Normal"
-          value={normalCount}
-          icon={CheckCircle2}
-          tone="green"
-          description="Within normal EUI range"
-        />
-
-        <StatCard
-          title="High"
-          value={highCount}
-          icon={Flame}
-          tone="amber"
-          description="Needs monitoring"
-        />
-
-        <StatCard
-          title="Critical"
-          value={criticalCount}
-          icon={AlertTriangle}
-          tone="red"
-          description="Needs immediate review"
-        />
-      </section>
 
       {buildingsWithCoordinates.length === 0 && !isLoading && (
         <EmptyState
@@ -1230,22 +1154,14 @@ export default function BuildingMap() {
         <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">
-              GIS Building Records
+              Building Records
             </h2>
-
-            <p className="mt-1 text-sm font-normal text-slate-500">
-              Location-based EUI and monitoring summary.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-            {filteredBuildings.length} buildings shown
           </div>
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[1180px]">
-            <div className="grid grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
+          <div className="min-w-[760px]">
+            <div className="grid grid-cols-[1.4fr_1fr_0.9fr_1fr_0.6fr_0.8fr] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Building</div>
               <div>Total kWh</div>
               <div>Floor Area</div>
@@ -1254,7 +1170,6 @@ export default function BuildingMap() {
                 <InfoHint term="eui" />
               </div>
               <div>Meters</div>
-              <div>Coordinates</div>
               <div>Status</div>
             </div>
 
@@ -1289,7 +1204,7 @@ export default function BuildingMap() {
                     key={building.building_id}
                     type="button"
                     onClick={() => selectBuilding(building, { scrollToMap: true })}
-                    className={`grid w-full grid-cols-[1.2fr_0.9fr_0.9fr_1fr_0.9fr_1fr_0.9fr] items-center px-4 py-4 text-left text-sm transition ${
+                    className={`grid w-full grid-cols-[1.4fr_1fr_0.9fr_1fr_0.6fr_0.8fr] items-center px-4 py-4 text-left text-sm transition ${
                       activeBuilding?.building_id === building.building_id
                         ? "bg-emerald-50/60"
                         : "hover:bg-slate-50"
@@ -1300,10 +1215,11 @@ export default function BuildingMap() {
                         {building.name}
                       </p>
 
-                      <p className="mt-1 text-xs font-normal text-slate-400">
-                        {building.verified_count} verified /{" "}
-                        {building.pending_count} review
-                      </p>
+                      {building.building_type && (
+                        <p className="mt-1 text-xs font-normal text-slate-400">
+                          {building.building_type}
+                        </p>
+                      )}
                     </div>
 
                     <div className="font-semibold text-slate-950">
@@ -1314,16 +1230,14 @@ export default function BuildingMap() {
                       {formatNumber(building.floor_area)} m²
                     </div>
 
-                    <div className="font-semibold text-emerald-700">
-                      {formatDecimal(building.eui)} kWh/m²
+                    {/* A building with no readings used to show a green "0.00". */}
+                    <div className="font-semibold text-slate-950">
+                      {formatEui(building)}
+                      {building.energy_status !== "No Data" && " kWh/m²"}
                     </div>
 
                     <div className="font-semibold text-slate-700">
                       {building.meter_count}
-                    </div>
-
-                    <div className="font-medium text-slate-600">
-                      {building.latitude}, {building.longitude}
                     </div>
 
                     <div>

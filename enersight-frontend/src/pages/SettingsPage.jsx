@@ -6,14 +6,13 @@ import {
   Lock,
   Save,
   Settings,
-  ShieldCheck,
-  User,
   X,
   XCircle,
   Zap,
 } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
+import SampleDataPanel from "../components/SampleDataPanel";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
@@ -115,51 +114,15 @@ function Field({ label, children, helper }) {
   );
 }
 
-function InfoCard({ icon: Icon, title, value, description, tone = "dark" }) {
-  const toneClass =
-    tone === "green"
-      ? "border-emerald-100 bg-emerald-50 text-emerald-700"
-      : tone === "blue"
-      ? "border-blue-100 bg-blue-50 text-blue-700"
-      : tone === "purple"
-      ? "border-purple-100 bg-purple-50 text-purple-700"
-      : "border-slate-200 bg-white text-slate-950";
-
-  const iconClass =
-    tone === "green"
-      ? "bg-emerald-700 text-white"
-      : tone === "blue"
-      ? "bg-blue-600 text-white"
-      : tone === "purple"
-      ? "bg-purple-600 text-white"
-      : "bg-slate-950 text-lime-300";
-
-  return (
-    <div className={`rounded-2xl border p-5 shadow-sm ${toneClass}`}>
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold opacity-80">{title}</p>
-          <p className="mt-2 break-words text-2xl font-bold leading-tight">
-            {value || "Not set"}
-          </p>
-        </div>
-
-        <div className={`grid h-12 w-12 shrink-0 place-items-center rounded-2xl ${iconClass}`}>
-          <Icon size={23} />
-        </div>
-      </div>
-
-      <p className="text-xs font-normal leading-5 opacity-75">{description}</p>
-    </div>
-  );
-}
-
 const SettingsPage = ({ role = "Staff" }) => {
   // PUT /settings/rate requires Admin or Manager, so Staff sees the page (for
   // their own account and password) but not the system-wide rate control.
   const canEditRate = role === "Admin" || role === "Manager";
 
-  const [profile, setProfile] = useState(defaultProfile);
+  // Starting from the empty defaultProfile made the form look edited before it
+  // loaded, which paused the refresh that loads it: the page showed "User" and
+  // blank fields for every account.
+  const [profile, setProfile] = useState(getSavedUser);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
@@ -408,40 +371,11 @@ const SettingsPage = ({ role = "Staff" }) => {
       />
 
       <PageHeader
-        eyebrow="Account Settings"
         title="Settings"
-        subtitle="Update your account details and password."
         icon={Settings}
-        status={isSyncing ? "Syncing settings" : `Role: ${profile.role || "Staff"}`}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isSyncing}
-        intervalMs={AUTO_REFRESH_MS}
       />
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <InfoCard
-          icon={User}
-          title="Signed-in User"
-          value={profile.full_name || profile.username || "User"}
-          description="Current local user profile"
-        />
-
-        <InfoCard
-          icon={ShieldCheck}
-          title="Access Role"
-          value={profile.role || "User"}
-          description="Determines available system pages"
-          tone="purple"
-        />
-
-        <InfoCard
-          icon={CheckCircle2}
-          title="Status"
-          value={profile.status || "Active"}
-          description="Current account state"
-          tone="green"
-        />
-      </section>
 
       {canEditRate && (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -520,14 +454,9 @@ const SettingsPage = ({ role = "Staff" }) => {
               {accountInitials}
             </div>
 
-            <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-slate-950">
-                Account Profile
-              </h2>
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Update local account details.
-              </p>
-            </div>
+            <h2 className="min-w-0 text-xl font-semibold text-slate-950">
+              Account Profile
+            </h2>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
@@ -581,14 +510,9 @@ const SettingsPage = ({ role = "Staff" }) => {
               <Lock size={23} />
             </div>
 
-            <div>
-              <h2 className="text-xl font-semibold text-slate-950">
-                Password
-              </h2>
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Prepare account password update.
-              </p>
-            </div>
+            <h2 className="text-xl font-semibold text-slate-950">
+              Password
+            </h2>
           </div>
 
           <div className="grid gap-4">
@@ -662,6 +586,8 @@ const SettingsPage = ({ role = "Staff" }) => {
           </div>
         </div>
       </section>
+
+      {role === "Admin" && <SampleDataPanel showToast={showToast} />}
 
       {/* The "System Preferences" and "Accent Style" cards were removed.
           Notifications, Report Reminder, Auto Refresh, Compact Mode and the four

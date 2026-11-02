@@ -1,8 +1,6 @@
 import React, { useMemo, useState } from "react";
 import {
-  BadgeCheck,
   CheckCircle2,
-  IdCard,
   KeyRound,
   LogOut,
   Mail,
@@ -12,7 +10,6 @@ import {
 
 import PageHeader from "../components/PageHeader";
 import ConfirmationModal from "../components/ConfirmationModal";
-import StatCard from "../components/StatCard";
 import { clearSavedLogin } from "../utils/session";
 import { getRoleLabel } from "../utils/roles";
 
@@ -68,39 +65,14 @@ function getInitials(name, username) {
 
 function getRoleTone(role) {
   if (role === "Admin") {
-    return {
-      badge: "border-purple-100 bg-purple-50 text-purple-700",
-      icon: "bg-purple-600 text-white",
-    };
+    return { icon: "bg-purple-600 text-white" };
   }
 
   if (role === "Manager") {
-    return {
-      badge: "border-blue-100 bg-blue-50 text-blue-700",
-      icon: "bg-blue-600 text-white",
-    };
+    return { icon: "bg-blue-600 text-white" };
   }
 
-  return {
-    badge: "border-emerald-100 bg-emerald-50 text-emerald-700",
-    icon: "bg-emerald-700 text-white",
-  };
-}
-
-function getStatusStyle(status) {
-  if (status === "Active") {
-    return "border-emerald-100 bg-emerald-50 text-emerald-700";
-  }
-
-  if (status === "Pending") {
-    return "border-amber-100 bg-amber-50 text-amber-700";
-  }
-
-  if (status === "Rejected" || status === "Inactive") {
-    return "border-red-100 bg-red-50 text-red-700";
-  }
-
-  return "border-slate-100 bg-slate-50 text-slate-600";
+  return { icon: "bg-emerald-700 text-white" };
 }
 
 function InfoCard({ label, value, icon: Icon }) {
@@ -154,65 +126,7 @@ const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        eyebrow="User Profile"
-        title={currentUser?.full_name || "System User"}
-        subtitle="View account details, role, and permissions."
-        icon={User}
-        status={`Status: ${currentStatus}`}
-      >
-        <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium leading-none text-slate-600">
-          Role: {currentRole}
-        </span>
-      </PageHeader>
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Account"
-          value={currentUser?.username || "User"}
-          description="Signed-in account username"
-          icon={User}
-          compactValue
-        />
-
-        <StatCard
-          title="Role"
-          value={getRoleLabel(currentRole)}
-          description="Assigned system access level"
-          icon={ShieldCheck}
-          tone={
-            currentRole === "Admin"
-              ? "purple"
-              : currentRole === "Manager"
-              ? "blue"
-              : "green"
-          }
-          compactValue
-        />
-
-        <StatCard
-          title="Status"
-          value={currentStatus}
-          description="Current account approval state"
-          icon={CheckCircle2}
-          tone={
-            currentStatus === "Active"
-              ? "green"
-              : currentStatus === "Pending"
-              ? "amber"
-              : "dark"
-          }
-          compactValue
-        />
-
-        <StatCard
-          title="Permissions"
-          value={accessList.length}
-          description="Available role permissions"
-          icon={BadgeCheck}
-          tone="blue"
-        />
-      </section>
+      <PageHeader title="My Profile" icon={User} />
 
       <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
         <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -221,14 +135,9 @@ const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
               {accountInitials}
             </div>
 
-            <div className="min-w-0">
-              <h2 className="text-xl font-semibold text-slate-950">
-                Account Information
-              </h2>
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Basic profile details stored in the system.
-              </p>
-            </div>
+            <h2 className="min-w-0 text-xl font-semibold text-slate-950">
+              Account Information
+            </h2>
           </div>
 
           <div className="grid gap-4">
@@ -245,14 +154,12 @@ const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
             />
 
             <InfoCard
-              label="User ID"
-              value={
-                currentUser?.user_id ? `#${currentUser.user_id}` : "Not available"
-              }
-              icon={IdCard}
+              label="Role"
+              value={getRoleLabel(currentRole)}
+              icon={ShieldCheck}
             />
 
-            <InfoCard label="Role" value={currentRole} icon={ShieldCheck} />
+            <InfoCard label="Status" value={currentStatus} icon={CheckCircle2} />
           </div>
         </div>
 
@@ -270,20 +177,6 @@ const ProfilePage = ({ user, role, onLogout, setCurrentPage }) => {
                 Available pages and actions for this account.
               </p>
             </div>
-          </div>
-
-          <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <span className={`rounded-full border px-3 py-1 text-xs font-medium ${tone.badge}`}>
-              {currentRole}
-            </span>
-
-            <span className={`rounded-full border px-3 py-1 text-xs font-medium ${getStatusStyle(currentStatus)}`}>
-              {currentStatus}
-            </span>
-
-            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
-              {accessList.length} permissions
-            </span>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2">

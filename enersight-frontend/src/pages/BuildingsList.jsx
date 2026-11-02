@@ -2,8 +2,6 @@ import React, { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import {
   Building2,
   CheckCircle2,
-  Database,
-  Eye,
   Layers,
   MapPinned,
   Pencil,
@@ -13,7 +11,6 @@ import {
   Trash2,
   X,
   XCircle,
-  Zap,
 } from "lucide-react";
 
 import PageHeader from "../components/PageHeader";
@@ -30,7 +27,6 @@ import { formatNumber } from "../utils/format";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import {
-  DEFAULT_RATE_PER_KWH,
   applianceKwhMonth,
   formatPeso,
 } from "../utils/currency";
@@ -39,6 +35,7 @@ import {
   isApplianceDraftStarted,
   validateApplianceForm,
 } from "../utils/appliances";
+import { SERVER_UNREACHABLE } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 
 // Loaded on first open: the profile brings Recharts and Leaflet, which this page
@@ -81,61 +78,6 @@ const emptyForm = {
   building_type: "Office",
   status: "Active",
 };
-
-// Kept in step with DEMO_BUILDINGS in enersight-backend/seed_demo_data.py, so
-// loading samples here and seeding from the backend cannot produce two competing
-// sets of campus buildings. Generic names on the DNSC Panabo campus - not a
-// roster of real facilities.
-const sampleBuildings = [
-  {
-    name: "Administration Building",
-    latitude: 7.31389,
-    longitude: 125.67127,
-    floor_area: 2400,
-    building_type: "Office",
-    status: "Active",
-  },
-  {
-    name: "Institute of Computing",
-    latitude: 7.31425,
-    longitude: 125.67185,
-    floor_area: 1800,
-    building_type: "Laboratory",
-    status: "Active",
-  },
-  {
-    name: "Learning Resource Center",
-    latitude: 7.31352,
-    longitude: 125.67068,
-    floor_area: 1600,
-    building_type: "Support",
-    status: "Active",
-  },
-  {
-    name: "Science Laboratory Building",
-    latitude: 7.31461,
-    longitude: 125.67102,
-    floor_area: 1250,
-    building_type: "Office",
-    status: "Active",
-  },
-  {
-    name: "Student Center",
-    latitude: 7.31318,
-    longitude: 125.67214,
-    floor_area: 1400,
-    building_type: "Support",
-    status: "Active",
-  },
-  {
-    name: "Maintenance and Storage",
-    latitude: 7.31278,
-    longitude: 125.67035,
-    floor_area: 900,
-    building_type: "Warehouse",
-    status: "Active",
-  },
-];
 
 const buildingTypes = [
   "Office",
@@ -859,7 +801,7 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
     } catch (error) {
       console.error("Fetch appliances error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -928,7 +870,7 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
     } catch (error) {
       console.error("Save appliance error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -962,7 +904,7 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
     } catch (error) {
       console.error("Delete appliance error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1195,7 +1137,7 @@ function ApplianceModal({ building, rate, onClose, showToast }) {
 }
 
 // Kept next to each real row's grid-cols-[...] class so the two stay in step.
-const BUILDING_ROW_COLUMNS = "90px 1.2fr 1fr 1.2fr 1fr 130px 210px";
+const BUILDING_ROW_COLUMNS = "1.4fr 1fr 1.2fr 0.9fr 130px 190px";
 
 const BuildingsList = ({ role = "Staff" }) => {
   // Deleting a building is Admin-only on the backend (buildings.py). Managers can
@@ -1217,8 +1159,6 @@ const BuildingsList = ({ role = "Staff" }) => {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
-  const [isRemovingSamples, setIsRemovingSamples] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [applianceBuilding, setApplianceBuilding] = useState(null);
   const [profileBuilding, setProfileBuilding] = useState(null);
@@ -1259,7 +1199,7 @@ const BuildingsList = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Fetch buildings error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1319,18 +1259,6 @@ const BuildingsList = ({ role = "Staff" }) => {
   }
 
   const totalBuildings = buildings.length;
-
-  const activeBuildings = buildings.filter(
-    (building) => building.status === "Active"
-  ).length;
-
-  const inactiveBuildings = buildings.filter(
-    (building) => building.status === "Inactive"
-  ).length;
-
-  const mappedBuildings = buildings.filter(
-    (building) => building.latitude !== "" && building.longitude !== ""
-  ).length;
 
   function openAddModal() {
     setForm(emptyForm);
@@ -1483,141 +1411,11 @@ const BuildingsList = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Save building error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
       setIsSaving(false);
-    }
-  }
-
-  function askLoadSamples() {
-    setConfirmation({
-      type: "loadSamples",
-      title: "Load sample buildings?",
-      message:
-        "This will add predefined sample building records to PostgreSQL. Existing sample buildings will not be duplicated.",
-      note: "Use this only for demo, testing, or presentation preparation.",
-      confirmText: "Load Samples",
-      variant: "success",
-    });
-  }
-
-  async function confirmLoadSampleBuildings() {
-    const existingNames = buildings.map((building) =>
-      building.name.toLowerCase().trim()
-    );
-
-    const buildingsToAdd = sampleBuildings.filter(
-      (sample) => !existingNames.includes(sample.name.toLowerCase().trim())
-    );
-
-    if (buildingsToAdd.length === 0) {
-      showToast("Sample buildings are already loaded.", "success");
-      setConfirmation(null);
-      return;
-    }
-
-    setIsSeeding(true);
-
-    try {
-      for (const sample of buildingsToAdd) {
-        const response = await apiFetch(`${API_BASE_URL}/buildings/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(sample),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          showToast(data.detail || `Could not add ${sample.name}.`, "error");
-          return;
-        }
-      }
-
-      showToast(
-        `${buildingsToAdd.length} sample building records were loaded.`,
-        "success"
-      );
-
-      setConfirmation(null);
-      await fetchBuildings(false);
-    } catch (error) {
-      console.error("Load sample buildings error:", error);
-      showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
-        "error"
-      );
-    } finally {
-      setIsSeeding(false);
-    }
-  }
-
-  function askRemoveSamples() {
-    setConfirmation({
-      type: "removeSamples",
-      title: "Remove sample buildings?",
-      message:
-        "This will delete only the predefined sample buildings from PostgreSQL. Your manually added buildings will stay.",
-      note: "This action cannot be automatically undone.",
-      confirmText: "Remove Samples",
-      variant: "danger",
-    });
-  }
-
-  async function confirmRemoveSampleBuildings() {
-    setIsRemovingSamples(true);
-
-    const sampleNames = sampleBuildings.map((sample) =>
-      sample.name.toLowerCase().trim()
-    );
-
-    const samplesToDelete = buildings.filter((building) =>
-      sampleNames.includes(building.name.toLowerCase().trim())
-    );
-
-    if (samplesToDelete.length === 0) {
-      showToast("No sample buildings found to remove.", "success");
-      setIsRemovingSamples(false);
-      setConfirmation(null);
-      return;
-    }
-
-    try {
-      for (const building of samplesToDelete) {
-        const response = await apiFetch(
-          `${API_BASE_URL}/buildings/${building.building_id}`,
-          {
-            method: "DELETE",
-          }
-        );
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          showToast(data.detail || `Could not delete ${building.name}.`, "error");
-          return;
-        }
-      }
-
-      showToast(
-        `${samplesToDelete.length} sample building records were removed.`,
-        "success"
-      );
-
-      setConfirmation(null);
-      await fetchBuildings(false);
-    } catch (error) {
-      console.error("Remove sample buildings error:", error);
-      showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
-        "error"
-      );
-    } finally {
-      setIsRemovingSamples(false);
     }
   }
 
@@ -1663,7 +1461,7 @@ const BuildingsList = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Delete building error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -1672,27 +1470,12 @@ const BuildingsList = ({ role = "Staff" }) => {
   }
 
   function handleConfirmAction() {
-    if (confirmation?.type === "loadSamples") {
-      confirmLoadSampleBuildings();
-      return;
-    }
-
-    if (confirmation?.type === "removeSamples") {
-      confirmRemoveSampleBuildings();
-      return;
-    }
-
     if (confirmation?.type === "deleteBuilding") {
       confirmDeleteBuilding();
     }
   }
 
-  const confirmationProcessing =
-    confirmation?.type === "loadSamples"
-      ? isSeeding
-      : confirmation?.type === "removeSamples"
-      ? isRemovingSamples
-      : isDeleting;
+  const confirmationProcessing = isDeleting;
 
   return (
     <div className="space-y-6">
@@ -1705,140 +1488,26 @@ const BuildingsList = ({ role = "Staff" }) => {
       <RateNotice isFallback={isRateFallback} error={rateError} />
 
       <PageHeader
-        eyebrow="Building Records"
         title="Buildings Management"
-        subtitle="Manage building records, locations, and monitoring status."
         icon={Building2}
-        status={isLoading ? "Syncing data" : `${totalBuildings} Buildings`}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoading}
-        intervalMs={AUTO_REFRESH_MS}
         actions={
-          <>
-            <HeaderActionButton
-              icon={Database}
-              onClick={askLoadSamples}
-              disabled={isSeeding}
-            >
-              {isSeeding ? "Loading..." : "Load Samples"}
-            </HeaderActionButton>
-
-            {canDelete && (
-              <HeaderActionButton
-                icon={Trash2}
-                variant="danger"
-                onClick={askRemoveSamples}
-                disabled={isRemovingSamples}
-              >
-                {isRemovingSamples ? "Removing..." : "Remove Samples"}
-              </HeaderActionButton>
-            )}
-
-            <HeaderActionButton icon={Plus} variant="dark" onClick={openAddModal}>
-              Add Building
-            </HeaderActionButton>
-          </>
+          <HeaderActionButton icon={Plus} variant="dark" onClick={openAddModal}>
+            Add Building
+          </HeaderActionButton>
         }
       />
-
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-500">
-                Total Buildings
-              </p>
-
-              <p className="mt-2 text-3xl font-bold text-slate-950">
-                {totalBuildings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-              <Building2 size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-slate-400">
-            Stored building records
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-emerald-700">
-                Active Buildings
-              </p>
-
-              <p className="mt-2 text-3xl font-bold text-emerald-800">
-                {activeBuildings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-700 text-white">
-              <CheckCircle2 size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-emerald-700">
-            Included in monitoring
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-red-100 bg-red-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-red-700">
-                Inactive Buildings
-              </p>
-
-              <p className="mt-2 text-3xl font-bold text-red-800">
-                {inactiveBuildings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-red-500 text-white">
-              <XCircle size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-red-700">
-            Excluded from active use
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-blue-700">GIS Mapped</p>
-
-              <p className="mt-2 text-3xl font-bold text-blue-800">
-                {mappedBuildings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-600 text-white">
-              <MapPinned size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-blue-700">
-            With valid coordinates
-          </p>
-        </div>
-      </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">
               Building List
+              <span className="ml-2 text-base font-medium text-slate-400">
+                {totalBuildings}
+              </span>
             </h2>
-
-            <p className="mt-1 text-sm font-normal text-slate-500">
-              Search, filter, view, update, or delete building records.
-            </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_170px_160px] xl:w-[760px]">
@@ -1884,9 +1553,8 @@ const BuildingsList = ({ role = "Staff" }) => {
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[980px]">
-            <div className="grid grid-cols-[90px_1.2fr_1fr_1.2fr_1fr_130px_210px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-              <div>ID</div>
+          <div className="min-w-[900px]">
+            <div className="grid grid-cols-[1.4fr_1fr_1.2fr_0.9fr_130px_190px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Building</div>
               <div>Type</div>
               <div>GIS Location</div>
@@ -1934,12 +1602,8 @@ const BuildingsList = ({ role = "Staff" }) => {
                   <div
                     key={building.building_id}
                     onClick={() => setProfileBuilding(building)}
-                    className="grid h-[72px] cursor-pointer grid-cols-[90px_1.2fr_1fr_1.2fr_1fr_130px_210px] items-center overflow-hidden px-4 text-sm transition hover:bg-emerald-50/40"
+                    className="grid h-[72px] cursor-pointer grid-cols-[1.4fr_1fr_1.2fr_0.9fr_130px_190px] items-center overflow-hidden px-4 text-sm transition hover:bg-emerald-50/40"
                   >
-                    <div className="font-semibold text-slate-700">
-                      #{building.building_id}
-                    </div>
-
                     <div className="min-w-0 overflow-hidden">
                       <button
                         type="button"
@@ -1989,27 +1653,21 @@ const BuildingsList = ({ role = "Staff" }) => {
                       </span>
                     </div>
 
-                    {/* The row opens the profile; these buttons do their own thing. */}
+                    {/* The row opens the profile; these buttons do their own thing.
+                        The appliance button is labelled: a plug icon alone did
+                        not say what it opens. */}
                     <div
                       className="flex flex-wrap gap-2"
                       onClick={(event) => event.stopPropagation()}
                     >
                       <button
                         type="button"
-                        onClick={() => setProfileBuilding(building)}
-                        className="rounded-xl bg-slate-100 p-2 text-slate-600 transition hover:bg-slate-200"
-                        title="View building profile"
-                      >
-                        <Eye size={16} />
-                      </button>
-
-                      <button
-                        type="button"
                         onClick={() => setApplianceBuilding(building)}
-                        className="rounded-xl bg-lime-50 p-2 text-lime-700 transition hover:bg-lime-100"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-lime-50 px-2.5 py-2 text-xs font-semibold text-lime-800 transition hover:bg-lime-100"
                         title="Manage appliances"
                       >
-                        <Plug size={16} />
+                        <Plug size={15} />
+                        Appliances
                       </button>
 
                       <button

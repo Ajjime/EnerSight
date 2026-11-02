@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
-  Database,
   Gauge,
   Map as MapIcon,
   MapPinned,
@@ -48,6 +47,8 @@ import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 import { formatCompact, formatDecimal, formatNumber } from "../utils/format";
 import {
+  EUI_CRITICAL_THRESHOLD,
+  EUI_HIGH_THRESHOLD,
   annotateReadingCoverage,
   annualizeEui,
   computeEui,
@@ -58,11 +59,14 @@ import {
   getAverageOcrAccuracy,
   getOcrScore,
   isLowOcrAccuracy,
+  isManualReading,
 } from "../utils/readingQuality";
+import { buildMeterRounds, getRecentMonths } from "../utils/meterRounds";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import InfoHint from "../components/InfoHint";
-import { DEFAULT_RATE_PER_KWH, formatPeso } from "../utils/currency";
+import { formatPeso } from "../utils/currency";
+import { describeError } from "../utils/messages";
 
 // Opened by clicking a building in the EUI ranking or a pin on the map preview.
 const BuildingProfile = lazy(() => import("../components/BuildingProfile"));
@@ -317,10 +321,10 @@ function EnergyForecastCard({ monthlyConsumption, rate, onOpenAnalytics }) {
             <p className="mt-3 flex items-start gap-1.5 text-xs font-normal leading-5 text-slate-400">
               <span>
                 {bestMethod.error !== null
-                  ? `Checked against months that have already happened, this estimate has landed within about ${Math.round(
+                  ? `Usually within about ${Math.round(
                       bestMethod.error * 100
                     )}% of the real figure.`
-                  : "There is not enough history yet to check how close this estimate lands, so treat it as a rough direction."}
+                  : "Not enough history yet to check its accuracy."}
               </span>
               <InfoHint term="forecastMethod" align="right" />
             </p>
@@ -730,11 +734,6 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage, rate, onOpenBui
     <SectionCard>
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-            <BarChart3 size={13} />
-            EUI Ranking
-          </div>
-
           <h2 className="text-lg font-semibold text-slate-950">
             Building EUI Comparison
           </h2>
@@ -829,9 +828,9 @@ function EuiComparisonCard({ buildingComparison, setCurrentPage, rate, onOpenBui
 
 function OcrStatusCard({
   averageOcrAccuracy,
-  verifiedReadings,
-  pendingReadings,
-  lowAccuracyReadings,
+  readingCount,
+  manualReadingCount,
+  lowAccuracyCount,
   setCurrentPage,
 }) {
   // null when every reading was typed in by hand, so there is no score to show.
@@ -842,25 +841,15 @@ function OcrStatusCard({
     : 0;
   const circumference = 2 * Math.PI * 42;
   const dashOffset = circumference - (accuracy / 100) * circumference;
-  const needsReview = pendingReadings.length + lowAccuracyReadings.length;
+  const photoReadingCount = readingCount - manualReadingCount;
 
   return (
     <SectionCard>
-      <div className="mb-5 flex items-start justify-between gap-3">
-        <div>
-          <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-700">
-            <ScanLine size={13} />
-            OCR Monitor
-          </div>
-
-          <h2 className="text-lg font-semibold text-slate-950">
-            OCR Reading Status
-          </h2>
-
-          <p className="mt-1 text-sm font-normal text-slate-400">
-            Accuracy and verification state.
-          </p>
-        </div>
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <h2 className="flex items-center gap-1.5 text-lg font-semibold text-slate-950">
+          OCR Accuracy
+          <InfoHint term="ocrAccuracy" />
+        </h2>
 
         <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-emerald-700 text-white shadow-sm">
           <ScanLine size={23} />
@@ -905,39 +894,33 @@ function OcrStatusCard({
             </div>
           </div>
 
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-slate-950">
-              {needsReview > 0 ? "Needs Review" : "All Clear"}
-            </p>
-
-            <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
-              {needsReview > 0
-                ? `${needsReview} reading${needsReview > 1 ? "s" : ""} require attention.`
-                : "All OCR readings are currently verified."}
-            </p>
-          </div>
+          <p className="min-w-0 flex-1 text-sm font-normal leading-6 text-slate-600">
+            {hasScores
+              ? `Average over ${formatNumber(photoReadingCount)} photo reading${photoReadingCount === 1 ? "" : "s"}.`
+              : "No photo readings yet."}
+          </p>
         </div>
       </div>
 
       <div className="mt-4 grid grid-cols-3 gap-3">
         <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
-          <p className="text-[11px] font-medium text-emerald-700">Verified</p>
+          <p className="text-[11px] font-medium text-emerald-700">Photo</p>
           <p className="mt-1 text-2xl font-bold text-emerald-700">
-            {verifiedReadings.length}
+            {formatNumber(photoReadingCount)}
           </p>
         </div>
 
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3">
-          <p className="text-[11px] font-medium text-amber-700">Pending</p>
-          <p className="mt-1 text-2xl font-bold text-amber-600">
-            {pendingReadings.length}
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-medium text-slate-600">Typed in</p>
+          <p className="mt-1 text-2xl font-bold text-slate-700">
+            {formatNumber(manualReadingCount)}
           </p>
         </div>
 
         <div className="rounded-2xl border border-red-100 bg-red-50 p-3">
-          <p className="text-[11px] font-medium text-red-700">Low Acc.</p>
+          <p className="text-[11px] font-medium text-red-700">Below 90%</p>
           <p className="mt-1 text-2xl font-bold text-red-700">
-            {lowAccuracyReadings.length}
+            {formatNumber(lowAccuracyCount)}
           </p>
         </div>
       </div>
@@ -947,14 +930,14 @@ function OcrStatusCard({
         onClick={() => setCurrentPage && setCurrentPage("ocr")}
         className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-700 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-emerald-800 hover:shadow-md"
       >
-        Open OCR Upload
+        Add Meter Reading
         <ChevronRight size={17} />
       </button>
     </SectionCard>
   );
 }
 
-export default function Dashboard({ role, setCurrentPage }) {
+export default function Dashboard({ setCurrentPage }) {
   const [buildings, setBuildings] = useState([]);
   const [meters, setMeters] = useState([]);
   const [readings, setReadings] = useState([]);
@@ -1030,8 +1013,7 @@ export default function Dashboard({ role, setCurrentPage }) {
     } catch (error) {
       console.error("Dashboard refresh error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -1177,8 +1159,12 @@ export default function Dashboard({ role, setCurrentPage }) {
     (building) => building.latitude && building.longitude
   );
 
-  const pendingReadings = readings.filter((reading) => !reading.is_verified);
-  const verifiedReadings = readings.filter((reading) => reading.is_verified);
+  // There is no review step (every new reading is saved as verified), so the
+  // Dashboard no longer counts "readings to check". It shows the month's meter
+  // round instead, the same one Add Meter Reading works through.
+  const thisMonth = getRecentMonths(1)[0];
+  const meterRound = buildMeterRounds(meters, readings, thisMonth);
+  const manualReadingCount = readings.filter(isManualReading).length;
   // Photo readings only: a typed-in reading has no OCR score to be low.
   const lowAccuracyReadings = readings.filter(isLowOcrAccuracy);
 
@@ -1251,15 +1237,21 @@ export default function Dashboard({ role, setCurrentPage }) {
         ? `kWh/m² · Highest: ${highestBuilding.building}`
         : "kWh/m² · No EUI records yet",
       icon: TrendingUp,
-      color: averageEui > 20 ? "red" : averageEui > 10 ? "amber" : "emerald",
+      // Was red above 20 and amber above 10, so a Normal average (144) read as
+      // Critical. Same thresholds as the building statuses now.
+      color:
+        averageEui > EUI_CRITICAL_THRESHOLD
+          ? "red"
+          : averageEui > EUI_HIGH_THRESHOLD
+          ? "amber"
+          : "emerald",
     },
     {
-      title: "Readings to Check",
-      hint: "needsReview",
-      value: pendingReadings.length,
-      subtitle: `${verifiedReadings.length} verified readings saved`,
+      title: "Meters to Read",
+      value: meterRound.toRead.length,
+      subtitle: `${meterRound.done.length} of ${meters.length} read in ${thisMonth.label}`,
       icon: ScanLine,
-      color: pendingReadings.length > 0 ? "amber" : "emerald",
+      color: meterRound.toRead.length > 0 ? "amber" : "emerald",
     },
   ];
 
@@ -1271,15 +1263,10 @@ export default function Dashboard({ role, setCurrentPage }) {
       />
 
       <PageHeader
-        eyebrow="EnerSight Command Overview"
         title="Energy Monitoring Dashboard"
-        subtitle="Monitor buildings, consumption, OCR readings, and reports."
         icon={Gauge}
-        role={role || "User"}
-        status={isLoading ? "Backend: Syncing" : "Backend: Connected"}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoading}
-        intervalMs={AUTO_REFRESH_MS}
       />
 
       <RateNotice isFallback={isRateFallback} error={rateError} />
@@ -1297,10 +1284,6 @@ export default function Dashboard({ role, setCurrentPage }) {
               <h2 className="text-lg font-semibold text-slate-950">
                 Energy Consumption Trend
               </h2>
-
-              <p className="mt-1 text-sm font-normal text-slate-400">
-                Monthly usage from saved meter readings.
-              </p>
             </div>
 
             <button
@@ -1324,29 +1307,21 @@ export default function Dashboard({ role, setCurrentPage }) {
               </h2>
 
               <p className="mt-1 text-sm font-normal text-slate-400">
-                Building EUI status preview. Click a pin for its full profile.
+                Click a pin for its full profile.
               </p>
             </div>
 
             <MapPinned size={22} className="text-emerald-700" />
           </div>
 
-          <div className="mb-4 grid grid-cols-3 gap-2">
-            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-              <Database size={14} />
-              {mappedBuildings.length} Mapped
-            </div>
-
-            <div className="flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+          {/* "Mapped" and "Intensity" chips sat here too, repeating the cards
+              at the top of the page. */}
+          {mapStatusSummary.critical > 0 && (
+            <div className="mb-4 inline-flex items-center gap-2 rounded-2xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
               <AlertTriangle size={14} />
               {mapStatusSummary.critical} Critical
             </div>
-
-            <div className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-              <TrendingUp size={14} />
-              Intensity {formatDecimal(averageEui)}
-            </div>
-          </div>
+          )}
 
           <MiniEnergyMap
             buildings={buildingAnalytics}
@@ -1405,9 +1380,9 @@ export default function Dashboard({ role, setCurrentPage }) {
 
         <OcrStatusCard
           averageOcrAccuracy={averageOcrAccuracy}
-          verifiedReadings={verifiedReadings}
-          pendingReadings={pendingReadings}
-          lowAccuracyReadings={lowAccuracyReadings}
+          readingCount={readings.length}
+          manualReadingCount={manualReadingCount}
+          lowAccuracyCount={lowAccuracyReadings.length}
           setCurrentPage={setCurrentPage}
         />
       </section>
@@ -1419,10 +1394,6 @@ export default function Dashboard({ role, setCurrentPage }) {
               <h2 className="text-lg font-semibold text-slate-950">
                 Latest Meter Readings
               </h2>
-
-              <p className="mt-1 text-sm font-normal text-slate-400">
-                Recently saved readings.
-              </p>
             </div>
 
             <Clock3 size={22} className="text-emerald-700" />
@@ -1476,10 +1447,10 @@ export default function Dashboard({ role, setCurrentPage }) {
 
                       <span
                         className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${getStatusClass(
-                          reading.is_verified ? "Verified" : "Pending"
+                          reading.is_verified ? "Verified" : "Needs Review"
                         )}`}
                       >
-                        {reading.is_verified ? "Verified" : "Pending"}
+                        {reading.is_verified ? "Verified" : "Needs Review"}
                       </span>
                     </div>
                   </div>

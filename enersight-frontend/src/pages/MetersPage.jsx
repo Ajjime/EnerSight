@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   Building2,
   CheckCircle2,
-  Database,
   Eye,
   Gauge,
   History,
@@ -26,6 +25,7 @@ import ToastMessage from "../components/ToastMessage";
 
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
+import { SERVER_UNREACHABLE, describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 
 const emptyForm = {
@@ -35,39 +35,6 @@ const emptyForm = {
   status: "Active",
   initial_reading: "",
 };
-
-const sampleMeters = [
-  {
-    serial_no: "MTR-ADM-001",
-    building_name: "Admin Building",
-    meter_type: "Digital",
-    status: "Active",
-  },
-  {
-    serial_no: "MTR-ENG-001",
-    building_name: "Engineering Building",
-    meter_type: "Digital",
-    status: "Active",
-  },
-  {
-    serial_no: "MTR-LIB-001",
-    building_name: "Library",
-    meter_type: "Analog",
-    status: "Active",
-  },
-  {
-    serial_no: "MTR-WRH-001",
-    building_name: "Warehouse",
-    meter_type: "Digital",
-    status: "Active",
-  },
-  {
-    serial_no: "MTR-LAB-001",
-    building_name: "Laboratory Building",
-    meter_type: "Digital",
-    status: "Active",
-  },
-];
 
 const meterTypes = ["Digital", "Analog"];
 const statusOptions = ["Active", "Inactive"];
@@ -322,7 +289,7 @@ function MeterModal({
 }
 
 // Kept next to the real row's grid-cols-[...] class so the two stay in step.
-const METER_ROW_COLUMNS = "80px 1fr 1.1fr 0.9fr 130px 130px 120px 160px";
+const METER_ROW_COLUMNS = "1fr 1.2fr 0.9fr 140px 140px 110px 130px";
 
 const MetersPage = ({ role = "Staff" }) => {
   // Deleting a meter is Admin-only on the backend (meters.py). Managers can create
@@ -346,8 +313,6 @@ const MetersPage = ({ role = "Staff" }) => {
   const [isLoadingMeters, setIsLoadingMeters] = useState(false);
   const [isLoadingBuildings, setIsLoadingBuildings] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
-  const [isRemovingSamples, setIsRemovingSamples] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   function showToast(message, type = "success") {
@@ -398,8 +363,7 @@ const MetersPage = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Fetch buildings error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -422,8 +386,7 @@ const MetersPage = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Fetch meters error:", error);
       showToast(
-        error.message ||
-          "Cannot connect to server. Please make sure FastAPI is running.",
+        describeError(error),
         "error"
       );
     } finally {
@@ -488,12 +451,6 @@ const MetersPage = ({ role = "Staff" }) => {
   }
 
   const totalMeters = meters.length;
-  const activeMeters = meters.filter((meter) => meter.status === "Active").length;
-  const inactiveMeters = meters.filter(
-    (meter) => meter.status === "Inactive"
-  ).length;
-  const assignedBuildings = new Set(meters.map((meter) => meter.building_id))
-    .size;
 
   function openAddModal() {
     setForm({
@@ -591,154 +548,11 @@ const MetersPage = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Save meter error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
       setIsSaving(false);
-    }
-  }
-
-  function askLoadSamples() {
-    setConfirmation({
-      type: "loadSamples",
-      title: "Load sample meters?",
-      message:
-        "This will add sample meters to PostgreSQL and assign them to matching sample buildings.",
-      note: "Make sure sample buildings are loaded first.",
-      confirmText: "Load Samples",
-      variant: "success",
-    });
-  }
-
-  async function confirmLoadSampleMeters() {
-    const existingSerials = meters.map((meter) =>
-      meter.serial_no.toLowerCase().trim()
-    );
-
-    const metersToAdd = sampleMeters.filter(
-      (sample) => !existingSerials.includes(sample.serial_no.toLowerCase().trim())
-    );
-
-    if (metersToAdd.length === 0) {
-      showToast("Sample meters are already loaded.", "success");
-      setConfirmation(null);
-      return;
-    }
-
-    setIsSeeding(true);
-
-    try {
-      for (const sample of metersToAdd) {
-        const targetBuilding = buildings.find(
-          (building) =>
-            building.name.toLowerCase().trim() ===
-            sample.building_name.toLowerCase().trim()
-        );
-
-        if (!targetBuilding) {
-          showToast(
-            `Cannot add ${sample.serial_no}. Please load sample building "${sample.building_name}" first.`,
-            "error"
-          );
-          return;
-        }
-
-        const response = await apiFetch(`${API_BASE_URL}/meters/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            serial_no: sample.serial_no,
-            building_id: Number(targetBuilding.building_id),
-            meter_type: sample.meter_type,
-            status: sample.status,
-          }),
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          showToast(data.detail || `Could not add ${sample.serial_no}.`, "error");
-          return;
-        }
-      }
-
-      showToast(
-        `${metersToAdd.length} sample meter records were loaded.`,
-        "success"
-      );
-
-      setConfirmation(null);
-      await fetchMeters();
-    } catch (error) {
-      console.error("Load sample meters error:", error);
-      showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
-        "error"
-      );
-    } finally {
-      setIsSeeding(false);
-    }
-  }
-
-  function askRemoveSamples() {
-    setConfirmation({
-      type: "removeSamples",
-      title: "Remove sample meters?",
-      message:
-        "This will delete only the predefined sample meters from PostgreSQL.",
-      note: "This action cannot be automatically undone.",
-      confirmText: "Remove Samples",
-      variant: "danger",
-    });
-  }
-
-  async function confirmRemoveSampleMeters() {
-    setIsRemovingSamples(true);
-
-    const sampleSerials = sampleMeters.map((sample) =>
-      sample.serial_no.toLowerCase().trim()
-    );
-
-    const samplesToDelete = meters.filter((meter) =>
-      sampleSerials.includes(meter.serial_no.toLowerCase().trim())
-    );
-
-    if (samplesToDelete.length === 0) {
-      showToast("No sample meters found to remove.", "success");
-      setIsRemovingSamples(false);
-      setConfirmation(null);
-      return;
-    }
-
-    try {
-      for (const meter of samplesToDelete) {
-        const response = await apiFetch(`${API_BASE_URL}/meters/${meter.meter_id}`, {
-          method: "DELETE",
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          showToast(data.detail || `Could not delete ${meter.serial_no}.`, "error");
-          return;
-        }
-      }
-
-      showToast(`${samplesToDelete.length} sample meter records were removed.`, "success");
-
-      setConfirmation(null);
-      await fetchMeters();
-    } catch (error) {
-      console.error("Remove sample meters error:", error);
-      showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
-        "error"
-      );
-    } finally {
-      setIsRemovingSamples(false);
     }
   }
 
@@ -781,7 +595,7 @@ const MetersPage = ({ role = "Staff" }) => {
     } catch (error) {
       console.error("Delete meter error:", error);
       showToast(
-        "Cannot connect to server. Please make sure FastAPI is running.",
+        SERVER_UNREACHABLE,
         "error"
       );
     } finally {
@@ -790,27 +604,12 @@ const MetersPage = ({ role = "Staff" }) => {
   }
 
   function handleConfirmAction() {
-    if (confirmation?.type === "loadSamples") {
-      confirmLoadSampleMeters();
-      return;
-    }
-
-    if (confirmation?.type === "removeSamples") {
-      confirmRemoveSampleMeters();
-      return;
-    }
-
     if (confirmation?.type === "deleteMeter") {
       confirmDeleteMeter();
     }
   }
 
-  const confirmationProcessing =
-    confirmation?.type === "loadSamples"
-      ? isSeeding
-      : confirmation?.type === "removeSamples"
-      ? isRemovingSamples
-      : isDeleting;
+  const confirmationProcessing = isDeleting;
 
   return (
     <div className="space-y-6">
@@ -821,39 +620,12 @@ const MetersPage = ({ role = "Staff" }) => {
       />
 
       <PageHeader
-        eyebrow="Meter Records"
         title="Meters Management"
-        subtitle="Manage assigned meters and operational status."
         icon={Gauge}
-        status={
-          isLoadingMeters || isLoadingBuildings
-            ? "Syncing data"
-            : `${totalMeters} Meters`
-        }
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoadingMeters || isLoadingBuildings}
-        intervalMs={AUTO_REFRESH_MS}
         actions={
           <>
-            <HeaderActionButton
-              icon={Database}
-              onClick={askLoadSamples}
-              disabled={isSeeding}
-            >
-              {isSeeding ? "Loading..." : "Load Samples"}
-            </HeaderActionButton>
-
-            {canDelete && (
-              <HeaderActionButton
-                icon={Trash2}
-                variant="danger"
-                onClick={askRemoveSamples}
-                disabled={isRemovingSamples}
-              >
-                {isRemovingSamples ? "Removing..." : "Remove Samples"}
-              </HeaderActionButton>
-            )}
-
             <HeaderActionButton
               icon={Plus}
               variant="dark"
@@ -875,91 +647,15 @@ const MetersPage = ({ role = "Staff" }) => {
         />
       )}
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-500">Total Meters</p>
-              <p className="mt-2 text-3xl font-bold text-slate-950">
-                {totalMeters}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-              <Gauge size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-slate-400">
-            Stored meter records
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-emerald-700">Active Meters</p>
-              <p className="mt-2 text-3xl font-bold text-emerald-800">
-                {activeMeters}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-700 text-white">
-              <CheckCircle2 size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-emerald-700">
-            Available for readings
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-red-100 bg-red-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-red-700">Inactive Meters</p>
-              <p className="mt-2 text-3xl font-bold text-red-800">
-                {inactiveMeters}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-red-500 text-white">
-              <XCircle size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-red-700">Not currently used</p>
-        </div>
-
-        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-blue-700">
-                Assigned Buildings
-              </p>
-              <p className="mt-2 text-3xl font-bold text-blue-800">
-                {assignedBuildings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-blue-600 text-white">
-              <Building2 size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-blue-700">
-            With assigned meters
-          </p>
-        </div>
-      </section>
-
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
-            <h2 className="text-xl font-semibold text-slate-950">Meter List</h2>
-            <p className="mt-1 text-sm font-normal text-slate-500">
-              Search, filter, view, update, or delete meter records.
-            </p>
+            <h2 className="text-xl font-semibold text-slate-950">
+              Meter List
+              <span className="ml-2 text-base font-medium text-slate-400">
+                {totalMeters}
+              </span>
+            </h2>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2 xl:w-[900px] xl:grid-cols-[1fr_160px_160px_180px]">
@@ -1016,9 +712,8 @@ const MetersPage = ({ role = "Staff" }) => {
         </div>
 
         <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[1180px]">
-            <div className="grid grid-cols-[80px_1fr_1.1fr_0.9fr_130px_130px_120px_160px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
-              <div>ID</div>
+          <div className="min-w-[960px]">
+            <div className="grid grid-cols-[1fr_1.2fr_0.9fr_140px_140px_110px_130px] bg-slate-50 px-4 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">
               <div>Serial No.</div>
               <div>Building</div>
               <div>Meter Type</div>
@@ -1067,20 +762,11 @@ const MetersPage = ({ role = "Staff" }) => {
                 {filteredMeters.map((meter) => (
                   <div
                     key={meter.meter_id}
-                    className="grid grid-cols-[80px_1fr_1.1fr_0.9fr_130px_130px_120px_160px] items-center px-4 py-4 text-sm"
+                    className="grid grid-cols-[1fr_1.2fr_0.9fr_140px_140px_110px_130px] items-center px-4 py-4 text-sm"
                   >
-                    <div className="font-semibold text-slate-700">
-                      #{meter.meter_id}
-                    </div>
-
-                    <div>
-                      <p className="font-semibold text-slate-950">
-                        {meter.serial_no}
-                      </p>
-                      <p className="mt-1 text-xs font-normal text-slate-400">
-                        Meter record
-                      </p>
-                    </div>
+                    <p className="font-semibold text-slate-950">
+                      {meter.serial_no}
+                    </p>
 
                     <div className="font-medium text-slate-600">
                       <div className="flex items-center gap-2">

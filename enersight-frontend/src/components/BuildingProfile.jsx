@@ -42,6 +42,7 @@ import { EUI_CRITICAL_THRESHOLD, EUI_HIGH_THRESHOLD } from "../utils/energyStatu
 import { buildBuildingProfile } from "../utils/buildingProfile";
 import { buildForecastModel, getNextMonthLabelsFromKey } from "../utils/forecast";
 import { OCR_ACCURACY_THRESHOLD, formatOcrAccuracy, isLowOcrAccuracy } from "../utils/readingQuality";
+import { describeError } from "../utils/messages";
 
 // Everything about one building in one place: the building record, its meters,
 // every reading, monthly consumption and forecast, appliances and saved reports.
@@ -313,7 +314,7 @@ function VerifiedBadge({ isVerified }) {
       }`}
     >
       {isVerified ? <CheckCircle2 size={12} /> : <Clock size={12} />}
-      {isVerified ? "Verified" : "Needs review"}
+      {isVerified ? "Verified" : "Needs Review"}
     </span>
   );
 }
@@ -570,7 +571,7 @@ function OverviewTab({ building, profile, rate, onShowTab }) {
             />
             <MiniStat label="Verified" value={formatNumber(quality.verifiedCount)} tone="green" />
             <MiniStat
-              label="Needs review"
+              label="Needs Review"
               value={formatNumber(quality.pendingCount)}
               tone={quality.pendingCount > 0 ? "amber" : "none"}
             />
@@ -1011,7 +1012,7 @@ export default function BuildingProfile({ buildingId, buildingName = "", onClose
       .catch((error) => {
         if (cancelled) return;
         console.error("Building profile error:", error);
-        setErrorMessage(error.message || "Cannot connect to server. Please make sure FastAPI is running.");
+        setErrorMessage(describeError(error));
       })
       .finally(() => {
         if (!cancelled) setIsLoading(false);

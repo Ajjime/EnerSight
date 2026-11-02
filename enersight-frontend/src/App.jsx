@@ -63,7 +63,6 @@ function PageFallback() {
 }
 
 const SYSTEM_NAME = "EnerSight";
-const SYSTEM_TAGLINE = "See energy clearly, manage buildings wisely.";
 
 // Sidebar section order. A group disappears entirely when the signed-in role
 // can't reach any of its pages (Staff never sees Records or Administration).
@@ -395,11 +394,11 @@ function App() {
     const hasAccess = canAccess(currentPage);
 
     if (!hasAccess) {
-      return <Dashboard role={role} setCurrentPage={goToPage} />;
+      return <Dashboard setCurrentPage={goToPage} />;
     }
 
     if (currentPage === "dashboard") {
-      return <Dashboard role={role} setCurrentPage={goToPage} />;
+      return <Dashboard setCurrentPage={goToPage} />;
     }
 
     if (currentPage === "map") {
@@ -448,7 +447,7 @@ function App() {
       return <SettingsPage role={role} />;
     }
 
-    return <Dashboard role={role} setCurrentPage={goToPage} />;
+    return <Dashboard setCurrentPage={goToPage} />;
   }
 
   if (!isAuthenticated) {
@@ -527,9 +526,6 @@ function App() {
               <h1 className="truncate text-xl font-bold leading-none text-white">
                 {SYSTEM_NAME}
               </h1>
-              <p className="mt-1 truncate text-[10px] font-semibold uppercase leading-4 tracking-[0.13em] text-lime-300">
-                {SYSTEM_TAGLINE}
-              </p>
             </div>
           </div>
 

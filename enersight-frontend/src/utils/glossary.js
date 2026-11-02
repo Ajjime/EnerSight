@@ -78,6 +78,14 @@ export const GLOSSARY = {
       "Which one wins depends on the data, so it can change as more readings come in.",
   },
 
+  forecastMethods: {
+    term: "The three forecasting methods",
+    definition:
+      "Moving average: the mean of the last 3 months. Weighted moving average: the same 3 months, with the newest counting most. Simple exponential smoothing: every past month folded into one level, recent months counting more.",
+    soWhat:
+      "All three are tested on your past readings, and the most accurate one leads.",
+  },
+
   levelForecast: {
     term: "Why every month shows the same figure",
     definition:
