@@ -21,13 +21,13 @@
 //    a full chart with a "Predicted from…" badge off one data point. Below
 //    MIN_MONTHS_FOR_FORECAST nothing is drawn at all.
 //
-// On zero-filling: a month with no reading is filled with 0, which reflects the
-// data as recorded rather than inventing a value. When a reading is skipped, the
-// consumption still happens but lands in the next reading's differential, so the
-// skipped month legitimately has nothing recorded against it and the following
-// month carries two months' worth. Spreading it backwards would be fabricating
-// readings that were never taken. Be ready to say this if asked: the honest fix is
-// to take readings every month, not to smooth over the ones that were missed.
+// The monthly series these get comes from buildCalendarMonths (utils/consumption.js):
+// each reading's kWh is spread over the days it covers, as ENERGY STAR Portfolio
+// Manager does with utility bills, and only complete months are kept. It used to
+// put each reading's kWh in the month the reading was taken, so a skipped reading
+// showed as a month of 0 followed by a double one, which these level-only
+// estimators read as real swings. A gap month can still reach fillMonthGaps (a
+// series no reading covers for a while); it is filled with 0.
 
 export const MONTH_LABELS = [
   "Jan",

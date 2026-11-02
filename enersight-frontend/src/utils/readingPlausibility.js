@@ -100,8 +100,12 @@ function formatKwh(value) {
  * when nothing stands out. `blocking` issues are the ones saving refuses anyway.
  *
  *   lower   below the previous reading (blocking)
+ *   start   a first reading measured from a starting value of 0
  *   jump    implies far more use per day than this meter's usual
  *   serial  matches part of the meter's serial number
+ *
+ * `usualDailyUse` is in register units, like the readings; `multiplier` only
+ * turns the figures in the message into kWh.
  */
 export function checkReadingPlausibility({
   value,
@@ -110,6 +114,8 @@ export function checkReadingPlausibility({
   readingDate,
   usualDailyUse,
   serialNo,
+  isFirstReading = false,
+  multiplier = 1,
 }) {
   const issues = [];
   const text = String(value ?? "").trim();
@@ -120,6 +126,7 @@ export function checkReadingPlausibility({
   }
 
   const previous = Number(previousValue) || 0;
+  const toKwh = multiplier > 0 ? multiplier : 1;
 
   if (reading < previous) {
     issues.push({
@@ -128,6 +135,17 @@ export function checkReadingPlausibility({
       message:
         `Lower than the last reading (${previous.toLocaleString()}). A meter only ` +
         "counts up, so a digit was probably misread or left out.",
+    });
+  } else if (isFirstReading && previous === 0 && reading > 0) {
+    // A meter already running when it was added shows its lifetime total, and a
+    // starting value left at 0 would count all of it as used since then.
+    issues.push({
+      code: "start",
+      blocking: false,
+      message:
+        `Starting from 0 counts all ${formatKwh(reading * toKwh)} kWh on this meter as ` +
+        "used since it was added. If it was already running, enter the number it " +
+        "showed then.",
     });
   } else if (usualDailyUse > 0 && timeOf(previousDate) !== null) {
     const readingTime = timeOf(readingDate) ?? Date.now();
@@ -140,8 +158,8 @@ export function checkReadingPlausibility({
         code: "jump",
         blocking: false,
         message:
-          `That is ${formatKwh(perDay)} kWh a day since the last reading, more ` +
-          `than ${JUMP_FACTOR}× this meter's usual ${formatKwh(usualDailyUse)} kWh ` +
+          `That is ${formatKwh(perDay * toKwh)} kWh a day since the last reading, more ` +
+          `than ${JUMP_FACTOR}× this meter's usual ${formatKwh(usualDailyUse * toKwh)} kWh ` +
           "a day. Check for an extra or misread digit.",
       });
     }

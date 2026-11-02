@@ -37,7 +37,6 @@ import HeaderActionButton from "../components/HeaderActionButton";
 import ForecastChart, { ForecastLegend } from "../components/ForecastChart";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import {
-  MONTH_LABELS,
   buildForecastModel,
   getForecastDirection,
   getNextMonthLabelsFromKey,
@@ -49,7 +48,6 @@ import { formatCompact, formatDecimal, formatNumber } from "../utils/format";
 import {
   EUI_CRITICAL_THRESHOLD,
   EUI_HIGH_THRESHOLD,
-  annotateReadingCoverage,
   annualizeEui,
   computeEui,
   getEnergyStatus,
@@ -62,6 +60,7 @@ import {
   isManualReading,
 } from "../utils/readingQuality";
 import { buildMeterRounds, getRecentMonths } from "../utils/meterRounds";
+import { buildCalendarMonths, prepareReadings, sumKwh } from "../utils/consumption";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import InfoHint from "../components/InfoHint";
@@ -92,6 +91,10 @@ function normalizeMeter(meter) {
     serial_no: meter.serial_no || "No serial number",
     meter_type: meter.meter_type || "Digital",
     status: meter.status || "Active",
+    // Read by prepareReadings (utils/consumption.js).
+    multiplier: meter.multiplier,
+    is_submeter: Boolean(meter.is_submeter),
+    created_at: meter.created_at || null,
   };
 }
 
@@ -104,7 +107,6 @@ function normalizeReading(reading) {
     user_id: reading.user_id,
     reading_value: presentReading,
     previous_reading: previousReading,
-    differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "",
     ocr_accuracy: getOcrScore(reading.ocr_accuracy),
@@ -168,7 +170,7 @@ function getRelativeDate(value) {
 }
 
 // getMonthName was removed with the year-blind month bucketing it existed for.
-// Month labels now come from MONTH_LABELS plus the reading's year.
+// Month labels now come from buildCalendarMonths (utils/consumption.js).
 
 // computeEui and getEnergyStatus were local copies of the same thresholds that
 // BuildingMap also carried. Both now come from utils/energyStatus.js so the
@@ -1007,9 +1009,9 @@ export default function Dashboard({ setCurrentPage }) {
 
       setBuildings(buildingData);
       setMeters(meterData);
-      // Coverage lets status be annualised the same way Analytics, Reports and
-      // the GIS map do it.
-      setReadings(annotateReadingCoverage(readingData));
+      // kWh, coverage and sub-meters worked out the same way Analytics, Reports
+      // and the GIS map do it.
+      setReadings(prepareReadings(readingData, meterData));
     } catch (error) {
       console.error("Dashboard refresh error:", error);
       showToast(
@@ -1059,10 +1061,7 @@ export default function Dashboard({ setCurrentPage }) {
           meterIds.includes(Number(reading.meter_id))
         );
 
-        const totalConsumption = buildingReadings.reduce(
-          (sum, reading) => sum + reading.differential,
-          0
-        );
+        const totalConsumption = sumKwh(buildingReadings);
 
         // Annualised over the days the readings cover. This page used to grade
         // cumulative intensity, which only grows as history accumulates, so after
@@ -1109,49 +1108,16 @@ export default function Dashboard({ setCurrentPage }) {
       .sort((a, b) => b.eui - a.eui);
   }, [buildings, meters, readings]);
 
-  // Grouped by calendar month AND year. This used to bucket into a fixed Jan-Dec
-  // array keyed on the bare month name, so September 2025 and September 2026 were
-  // summed into the same bar and the chart silently misreported history spanning
-  // more than a year.
+  // Complete calendar months, each reading's kWh spread over the days it covers
+  // (utils/consumption.js), so a skipped reading is not a month of 0 followed by
+  // a double one.
   //
   // The lucide "Map" icon is imported as MapIcon rather than Map: importing it
   // under its own name shadows the global Map constructor, which is what made an
   // earlier version of this block throw "Map is not a constructor".
-  const monthlyConsumption = useMemo(() => {
-    const grouped = {};
+  const monthlyConsumption = useMemo(() => buildCalendarMonths(readings), [readings]);
 
-    readings.forEach((reading) => {
-      const date = new Date(reading.reading_date);
-
-      if (Number.isNaN(date.getTime())) {
-        return;
-      }
-
-      const sortKey = `${date.getFullYear()}-${String(
-        date.getMonth() + 1
-      ).padStart(2, "0")}`;
-
-      if (grouped[sortKey]) {
-        grouped[sortKey].value += reading.differential;
-        return;
-      }
-
-      grouped[sortKey] = {
-        sortKey,
-        month: `${MONTH_LABELS[date.getMonth()]} ${date.getFullYear()}`,
-        value: reading.differential,
-      };
-    });
-
-    return Object.values(grouped).sort((a, b) =>
-      a.sortKey.localeCompare(b.sortKey)
-    );
-  }, [readings]);
-
-  const totalConsumption = readings.reduce(
-    (sum, reading) => sum + reading.differential,
-    0
-  );
+  const totalConsumption = sumKwh(readings);
 
   const totalCost = totalConsumption * rate;
 
@@ -1281,8 +1247,9 @@ export default function Dashboard({ setCurrentPage }) {
         <div className="flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-950">
+              <h2 className="flex items-center gap-1.5 text-lg font-semibold text-slate-950">
                 Energy Consumption Trend
+                <InfoHint term="monthlyKwh" />
               </h2>
             </div>
 

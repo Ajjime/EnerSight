@@ -5,6 +5,7 @@ import {
   getPeriodWindows,
   isInWindow,
   isInvalidCustomRange,
+  isMonthInWindow,
   parseDateInput,
 } from "./periods";
 
@@ -146,5 +147,22 @@ describe("custom range helpers", () => {
     expect(formatPeriodLabel("Custom Range", "2026-08-01", "")).toBe("From Aug 1, 2026");
     expect(formatPeriodLabel("Custom Range", "", "2026-08-31")).toBe("Up to Aug 31, 2026");
     expect(formatPeriodLabel("Custom Range", "", "")).toBe("All Time");
+  });
+});
+
+describe("isMonthInWindow", () => {
+  it("keeps the months that overlap the window", () => {
+    // July 15 to September 1 (Date months count from 0).
+    const window = { start: at(2026, 6, 15), end: at(2026, 8, 1) };
+
+    expect(isMonthInWindow("2026-07", window)).toBe(true);
+    expect(isMonthInWindow("2026-08", window)).toBe(true);
+    expect(isMonthInWindow("2026-09", window)).toBe(false);
+    expect(isMonthInWindow("2026-06", window)).toBe(false);
+  });
+
+  it("keeps everything without a window and nothing without a month", () => {
+    expect(isMonthInWindow("2026-07", null)).toBe(true);
+    expect(isMonthInWindow("", { start: 0, end: Infinity })).toBe(false);
   });
 });

@@ -143,11 +143,12 @@ export function getNextMeterToRead(toRead, currentMeterId) {
 
 /**
  * A meter's latest `limit` readings, newest first, each as
- * { reading, used, days, perDay }. `used` is reading_value - previous_reading;
- * `days` and `perDay` run from the meter's reading before it, and are null for its
- * first reading (whose previous value was typed in, with no date).
+ * { reading, used, days, perDay }. `used` is (reading_value - previous_reading) ×
+ * the meter's `multiplier`, in kWh; `days` and `perDay` run from the meter's
+ * reading before it, and are null for its first reading (whose previous value was
+ * typed in, with no date).
  */
-export function getMeterHistory(readings, meterId, limit = 5) {
+export function getMeterHistory(readings, meterId, limit = 5, multiplier = 1) {
   const own = (readings || [])
     .filter(
       (reading) =>
@@ -158,10 +159,9 @@ export function getMeterHistory(readings, meterId, limit = 5) {
 
   return own.slice(0, limit).map((reading, index) => {
     const before = own[index + 1] || null;
-    const used = Math.max(
-      Number(reading.reading_value) - Number(reading.previous_reading || 0),
-      0
-    );
+    const used =
+      Math.max(Number(reading.reading_value) - Number(reading.previous_reading || 0), 0) *
+      (multiplier > 0 ? multiplier : 1);
     const days = before ? daysBetween(before.reading_date, reading.reading_date) : null;
 
     return {

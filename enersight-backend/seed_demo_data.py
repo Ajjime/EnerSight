@@ -58,7 +58,7 @@ import argparse
 import math
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.auth import hash_password
 from app.database import SessionLocal
@@ -298,6 +298,21 @@ def is_left_unread(building: Building) -> bool:
     return bool(spec) and spec["eui"] is None
 
 
+def to_stored_utc(local: datetime) -> datetime:
+    """A local wall-clock time as reading_date stores it: naive UTC.
+
+    The app saves readings in UTC and the API marks them as UTC. The dates here are
+    planned in local time (a visit at 9 AM), so they are converted on the way in;
+    stored as they were, they showed 8 hours late in the Philippines.
+    """
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def from_stored_utc(stored: datetime) -> datetime:
+    """The local wall-clock time of a stored (naive UTC) reading_date."""
+    return stored.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
+
+
 def plan_reading_dates(
     month_starts: list[datetime], rng: random.Random, not_after: datetime
 ) -> list[datetime]:
@@ -378,7 +393,7 @@ def make_records(
                 user_id=user_id,
                 previous_reading=previous,
                 reading_value=running,
-                reading_date=reading_date,
+                reading_date=to_stored_utc(reading_date),
                 image_path=(
                     f"seed-{meter.serial_no.lower()}-{reading_date:%Y%m}.jpg"
                     if from_photo
@@ -490,7 +505,7 @@ def create_demo_buildings(db, rng: random.Random, dry_run: bool) -> int:
         db.refresh(building)
         created += 1
 
-        for index, serial in enumerate(serials):
+        for serial in serials:
             if db.query(Meter).filter(Meter.serial_no == serial).first():
                 continue
 
@@ -500,7 +515,10 @@ def create_demo_buildings(db, rng: random.Random, dry_run: bool) -> int:
                     serial_no=serial,
                     meter_type="Digital",
                     status="Active",
-                    meter_category="Main" if index == 0 else "Sub",
+                    # Every demo meter is a main meter on its own supply, so each
+                    # counts toward its building's total: the EUI targets are
+                    # tuned on the sum. (A sub-meter is left out of the total.)
+                    meter_category="Main",
                     installation_date=datetime.utcnow().strftime("%Y-%m-%d"),
                     initial_reading=float(rng.randint(4000, 12000)),
                 )
@@ -526,9 +544,10 @@ def backfill_meter(
     stays continuous and nothing already recorded has to move. Returns the number
     of readings added."""
     earliest = existing[0]
-    anchor_month = datetime(earliest.reading_date.year, earliest.reading_date.month, 1)
+    earliest_local = from_stored_utc(earliest.reading_date)
+    anchor_month = datetime(earliest_local.year, earliest_local.month, 1)
     month_starts = [add_months(anchor_month, -(months - offset)) for offset in range(months)]
-    dates = plan_reading_dates(month_starts, rng, earliest.reading_date)
+    dates = plan_reading_dates(month_starts, rng, earliest_local)
 
     target_end = float(earliest.previous_reading or earliest.reading_value or 0.0)
     consumptions = build_interval_consumption(meter_daily_kwh, dates, rng)

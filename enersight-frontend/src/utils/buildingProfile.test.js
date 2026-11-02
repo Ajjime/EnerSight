@@ -5,15 +5,17 @@ import {
   getApplianceComparison,
   getApplianceEui,
   getApplianceStatus,
-  getReadingDifferential,
 } from "./buildingProfile";
+import { prepareReadings } from "./consumption";
 import { EUI_CRITICAL_THRESHOLD, EUI_HIGH_THRESHOLD, getEnergyStatus } from "./energyStatus";
 
 const building = { building_id: 1, name: "Admin", floor_area: 100 };
 
+// Added before their first readings, so those readings' kWh count: meter 10's
+// first reading covers Dec 16 to Jan 15, meter 11's Jan 21 to Feb 20.
 const meters = [
-  { meter_id: 10, building_id: 1, serial_no: "B-200" },
-  { meter_id: 11, building_id: 1, serial_no: "A-100" },
+  { meter_id: 10, building_id: 1, serial_no: "B-200", created_at: "2025-12-16T08:00:00" },
+  { meter_id: 11, building_id: 1, serial_no: "A-100", created_at: "2026-01-21T08:00:00" },
   { meter_id: 99, building_id: 2, serial_no: "OTHER" },
 ];
 
@@ -31,25 +33,28 @@ const appliances = [
   { appliance_id: 2, building_id: 2, name: "Elsewhere", wattage: 5000, quantity: 1, hours_per_day: 24, days_per_month: 30 },
 ];
 
-describe("getReadingDifferential", () => {
-  it("is present minus previous and never negative", () => {
-    expect(getReadingDifferential({ reading_value: 1600, previous_reading: 1000 })).toBe(600);
-    expect(getReadingDifferential({ reading_value: 900, previous_reading: 1000 })).toBe(0);
-    expect(getReadingDifferential({ reading_value: 50, previous_reading: null })).toBe(50);
-  });
-});
-
 describe("buildMonthlyConsumption", () => {
-  it("keeps an empty month on the axis at zero", () => {
-    const months = buildMonthlyConsumption(readings.slice(0, 3), 10);
+  it("spreads a skipped month's reading over both months, not 0 then double", () => {
+    // Read Feb 1, then not until Apr 1: 590 kWh over February (28 days) and
+    // March (31 days).
+    const months = buildMonthlyConsumption(
+      prepareReadings(
+        [
+          { record_id: 1, meter_id: 1, previous_reading: 0, reading_value: 310, reading_date: "2026-02-01T00:00:00" },
+          { record_id: 2, meter_id: 1, previous_reading: 310, reading_value: 900, reading_date: "2026-04-01T00:00:00" },
+        ],
+        [{ meter_id: 1, created_at: "2026-01-01T00:00:00" }]
+      ),
+      10
+    );
 
-    expect(months.map((point) => point.month)).toEqual(["Jan 2026", "Feb 2026", "Mar 2026", "Apr 2026"]);
-    expect(months.map((point) => point.value)).toEqual([1000, 600, 0, 400]);
-    expect(months[1].cost).toBe(6000);
-    expect(months[2].isGap).toBe(true);
-    expect(months[1].change).toBeCloseTo(-0.4);
-    // No change figure against an empty month.
-    expect(months[3].change).toBeNull();
+    expect(months.map((point) => point.month)).toEqual(["Jan 2026", "Feb 2026", "Mar 2026"]);
+    expect(months[0].value).toBeCloseTo(310);
+    expect(months[1].value).toBeCloseTo(280);
+    expect(months[2].value).toBeCloseTo(310);
+    expect(months[1].cost).toBeCloseTo(2800);
+    expect(months[1].change).toBeCloseTo(-30 / 310);
+    expect(months[0].change).toBeNull();
   });
 });
 
@@ -65,9 +70,9 @@ describe("buildBuildingProfile", () => {
   });
 
   it("grades status the same way the rest of the app does", () => {
-    // Jan 15 to Apr 15 = 90 days, so the intensity is annualised.
+    // Dec 16 (meter 10 added) to Apr 15 = 120 days, so the intensity is annualised.
     expect(profile.totals.isAnnualized).toBe(true);
-    expect(profile.totals.spanDays).toBeCloseTo(90, 0);
+    expect(profile.totals.spanDays).toBeCloseTo(120, 0);
     expect(profile.totals.rawEui).toBe(22);
     expect(profile.totals.eui).toBeCloseTo(22 * (365 / profile.totals.spanDays));
     expect(profile.totals.status).toBe(getEnergyStatus(2200, 100, profile.totals.spanDays));
@@ -145,10 +150,60 @@ describe("buildBuildingProfile", () => {
     expect(without.totals.estimatedStatus).toBe("No Data");
   });
 
-  it("finds the peak and latest months", () => {
+  it("finds the peak and latest months, whole months only", () => {
+    // December starts partway (Dec 16) and April is not over (Apr 15). Meter 11,
+    // last read Feb 20, is more than 45 days behind and does not hold March back.
+    expect(profile.monthly.map((point) => point.month)).toEqual(["Jan 2026", "Feb 2026", "Mar 2026"]);
     expect(profile.totals.peakMonth.month).toBe("Jan 2026");
-    expect(profile.totals.latestMonth.month).toBe("Apr 2026");
-    expect(profile.totals.previousMonth.month).toBe("Mar 2026");
+    expect(profile.totals.latestMonth.month).toBe("Mar 2026");
+    expect(profile.totals.previousMonth.month).toBe("Feb 2026");
+    // Meter 10's Feb 15 to Apr 15 reading, 400 kWh over 59 days, 31 of them March.
+    expect(profile.totals.latestMonth.value).toBeCloseTo((400 * 31) / 59);
+  });
+
+  it("leaves a sub-meter out of the total but lists its kWh", () => {
+    const withSub = buildBuildingProfile({
+      building,
+      meters: meters.map((meter) => (meter.meter_id === 11 ? { ...meter, is_submeter: true } : meter)),
+      readings,
+      appliances: [],
+    });
+    const sub = withSub.meters.find((meter) => meter.meter_id === 11);
+
+    expect(withSub.totals.consumption).toBe(2000);
+    expect(sub.is_submeter).toBe(true);
+    expect(sub.consumption).toBe(200);
+    expect(sub.share).toBeCloseTo(200 / 2000);
+  });
+
+  it("applies each meter's multiplier", () => {
+    const withCt = buildBuildingProfile({
+      building,
+      meters: meters.map((meter) => (meter.meter_id === 11 ? { ...meter, multiplier: 40 } : meter)),
+      readings,
+      appliances: [],
+    });
+
+    expect(withCt.totals.consumption).toBe(2000 + 200 * 40);
+    expect(withCt.meters.find((meter) => meter.meter_id === 11).multiplier).toBe(40);
+    expect(withCt.meters.find((meter) => meter.meter_id === 10).multiplier).toBe(1);
+  });
+
+  it("counts no kWh for a first reading older than its meter", () => {
+    // Backfilled history: nothing says when the starting value was read.
+    const backfilled = buildBuildingProfile({
+      building,
+      meters: meters.map((meter) => ({ ...meter, created_at: "2026-06-01T08:00:00" })),
+      readings,
+      appliances: [],
+    });
+    const first = backfilled.readings.find((reading) => reading.record_id === 1);
+
+    expect(first.is_baseline).toBe(true);
+    expect(first.differential).toBe(0);
+    expect(backfilled.totals.consumption).toBe(600 + 400);
+    // Measured from that starting point (Jan 15) to Apr 15.
+    expect(backfilled.totals.spanDays).toBeCloseTo(90, 0);
   });
 
   it("handles a building with nothing recorded", () => {

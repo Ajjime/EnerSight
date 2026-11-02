@@ -15,12 +15,13 @@ numbers on the slide are the numbers the system will show.
 
 What it measures
 ----------------
-Monthly consumption per month is the sum of every reading's differential
-(`reading_value - previous_reading`) in that month, which is exactly what the
-Dashboard and Analytics pages chart. Months with no reading are kept as zero
-rather than dropped, for the reason given in forecast.js: the consumption still
-happened, it just landed in the next reading, so spreading it backwards would be
-inventing readings nobody took.
+Monthly consumption is built the way the Dashboard and Analytics pages chart it
+(buildCalendarMonths in src/utils/consumption.js): each reading's kWh, worked out
+by routes/map.py's rules (multiplier, sub-meters left out, a meter's starting
+point adding nothing), is spread evenly over the days it covers, and only months
+covered from first day to last are kept. Putting each reading's kWh in the month
+it was taken instead turned a skipped reading into a month of 0 followed by a
+double one.
 
 Each estimator is trained on the first 70% of the months and scored on the last
 30%, and every estimator is scored on the same held-out months so the errors
@@ -59,6 +60,9 @@ from typing import Dict, List, Optional, Sequence
 
 
 MIN_MONTHS_FOR_FORECAST = 3
+# A meter whose latest reading is this many days older than the newest one does
+# not hold the series back. Mirrors STALE_METER_DAYS in src/utils/consumption.js.
+STALE_METER_DAYS = 45
 SES_ALPHA = 0.3
 TEST_FRACTION = 0.3
 
@@ -179,26 +183,116 @@ def months_from_csv(path: str) -> "OrderedDict[str, float]":
     return months
 
 
+def _month_key(moment) -> str:
+    return f"{moment.year}-{moment.month:02d}"
+
+
+def _next_month_start(moment):
+    from datetime import datetime
+
+    if moment.month == 12:
+        return datetime(moment.year + 1, 1, 1)
+
+    return datetime(moment.year, moment.month + 1, 1)
+
+
+def calendar_months(rows) -> "OrderedDict[str, float]":
+    """kWh per complete calendar month from (meter_id, kwh, start, end) rows, in
+    local time. `start` is None for a meter's starting point. Mirrors
+    buildCalendarMonths in src/utils/consumption.js."""
+    from datetime import timedelta
+
+    latest_by_meter: Dict[int, object] = {}
+
+    for meter_id, _, _, end in rows:
+        if meter_id not in latest_by_meter or end > latest_by_meter[meter_id]:
+            latest_by_meter[meter_id] = end
+
+    if not latest_by_meter:
+        return OrderedDict()
+
+    newest = max(latest_by_meter.values())
+    coverage_end = min(
+        end
+        for end in latest_by_meter.values()
+        if newest - end <= timedelta(days=STALE_METER_DAYS)
+    )
+
+    starts = [start for _, _, start, _ in rows if start is not None]
+
+    if not starts:
+        return OrderedDict()
+
+    coverage_start = min(starts)
+    totals: Dict[str, float] = {}
+
+    for _, kwh, start, end in rows:
+        if start is None or kwh <= 0:
+            continue
+
+        if end <= start:
+            totals[_month_key(end)] = totals.get(_month_key(end), 0.0) + kwh
+            continue
+
+        length = (end - start).total_seconds()
+        cursor = start
+
+        while cursor < end:
+            boundary = min(_next_month_start(cursor), end)
+            share = kwh * (boundary - cursor).total_seconds() / length
+            totals[_month_key(cursor)] = totals.get(_month_key(cursor), 0.0) + share
+            cursor = boundary
+
+    month = (
+        coverage_start
+        if coverage_start == coverage_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        else _next_month_start(coverage_start)
+    )
+    months: "OrderedDict[str, float]" = OrderedDict()
+
+    while _next_month_start(month) <= coverage_end:
+        months[_month_key(month)] = totals.get(_month_key(month), 0.0)
+        month = _next_month_start(month)
+
+    return months
+
+
 def months_from_database() -> "OrderedDict[str, float]":
+    from datetime import timezone
+
     from app.database import SessionLocal
-    from app.models import ConsumptionRecord
+    from app.models import ConsumptionRecord, Meter
+    from app.routes.map import metered_readings
+
+    def to_local(stored):
+        # Stored naive UTC -> this machine's wall clock, where the browser draws
+        # its month boundaries too.
+        return stored.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None)
 
     db = SessionLocal()
 
     try:
-        totals: Dict[str, float] = {}
+        readings = db.query(ConsumptionRecord).all()
+        rows = []
 
-        for record in db.query(ConsumptionRecord).all():
-            if not record.reading_date:
+        for meter in db.query(Meter).all():
+            # Already counted on the meter it is wired after.
+            if meter.is_submeter:
                 continue
 
-            differential = float(record.reading_value or 0) - float(
-                record.previous_reading or 0
-            )
-            key = f"{record.reading_date.year}-{record.reading_date.month:02d}"
-            totals[key] = totals.get(key, 0.0) + differential
+            own = [reading for reading in readings if reading.meter_id == meter.meter_id]
 
-        return OrderedDict(sorted(totals.items()))
+            for reading, kwh, covers_from in metered_readings(meter, own):
+                rows.append(
+                    (
+                        meter.meter_id,
+                        kwh,
+                        to_local(covers_from) if covers_from else None,
+                        to_local(reading.reading_date),
+                    )
+                )
+
+        return calendar_months(rows)
     finally:
         db.close()
 

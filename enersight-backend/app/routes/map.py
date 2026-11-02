@@ -5,6 +5,7 @@ from .. import models
 from ..auth import get_current_user
 from ..database import get_db
 from ..models import User
+from ..schemas import utc_isoformat
 from .readings import reading_differential
 
 router = APIRouter(
@@ -25,14 +26,74 @@ MIN_DAYS_TO_ANNUALIZE = 20
 DAYS_PER_YEAR = 365
 
 
-def reading_span_days(readings) -> float:
-    """Days between the earliest and latest reading, used to annualise intensity."""
-    dates = [reading.reading_date for reading in readings if reading.reading_date]
+def metered_readings(meter, readings):
+    """[(reading, kwh, covers_from)] for one meter, oldest first.
 
-    if len(dates) < 2:
+    Mirrors prepareReadings in src/utils/consumption.js; change both together.
+
+    - kWh is (present - previous) x the meter's multiplier, never negative.
+    - Each reading covers the days since the meter's previous reading.
+    - A meter's first reading covers the days since the meter was added, when it
+      was added before that reading: its starting value was entered then. Otherwise
+      nothing says when the starting value was read, so the reading is the meter's
+      starting point and adds 0 kWh. Counting it anyway added kWh with no days to
+      spread them over: a starting value left at 0 put the meter's whole lifetime
+      register into one month.
+    """
+    multiplier = float(meter.multiplier or 0)
+    multiplier = multiplier if multiplier > 0 else 1.0
+
+    ordered = sorted(
+        (reading for reading in readings if reading.reading_date),
+        key=lambda reading: (reading.reading_date, reading.record_id),
+    )
+    rows = []
+
+    for index, reading in enumerate(ordered):
+        kwh = reading_differential(reading) * multiplier
+
+        if index > 0:
+            covers_from = ordered[index - 1].reading_date
+        elif meter.created_at and meter.created_at < reading.reading_date:
+            covers_from = meter.created_at
+        else:
+            covers_from = None
+            kwh = 0.0
+
+        rows.append((reading, kwh, covers_from))
+
+    return rows
+
+
+def building_consumption(building_meters, readings):
+    """(rows, total kWh) for one building, from its meters that count toward its
+    total. A sub-meter is wired after another meter of the building, so its energy
+    is already on that meter."""
+    rows = []
+
+    for meter in building_meters:
+        if meter.is_submeter:
+            continue
+
+        rows.extend(
+            metered_readings(
+                meter, [reading for reading in readings if reading.meter_id == meter.meter_id]
+            )
+        )
+
+    return rows, sum(kwh for _, kwh, _ in rows)
+
+
+def reading_span_days(rows) -> float:
+    """Days the readings cover, used to annualise intensity: from the earliest day
+    any of them covers to the latest reading. Mirrors getReadingSpanDays."""
+    starts = [covers_from or reading.reading_date for reading, _, covers_from in rows]
+    ends = [reading.reading_date for reading, _, _ in rows]
+
+    if not ends:
         return 0.0
 
-    span = (max(dates) - min(dates)).total_seconds() / 86400.0
+    span = (max(ends) - min(starts)).total_seconds() / 86400.0
 
     return span if span > 0 else 0.0
 
@@ -95,12 +156,12 @@ def get_building_map_data(db: Session = Depends(get_db), _: User = Depends(get_c
             reading for reading in readings if reading.meter_id in meter_ids
         ]
 
-        total_consumption = sum(
-            reading_differential(reading) for reading in building_readings
+        counted_rows, total_consumption = building_consumption(
+            building_meters, building_readings
         )
 
         floor_area = float(building.floor_area or 0)
-        span_days = reading_span_days(building_readings)
+        span_days = reading_span_days(counted_rows)
 
         eui = compute_eui(total_consumption, floor_area, span_days)
 
@@ -156,7 +217,7 @@ def get_building_map_data(db: Session = Depends(get_db), _: User = Depends(get_c
                 "reading_count": len(building_readings),
                 "total_consumption": total_consumption,
                 "latest_reading": latest_reading,
-                "latest_reading_date": latest_reading_date,
+                "latest_reading_date": utc_isoformat(latest_reading_date),
                 "average_accuracy": average_accuracy,
                 "verified_count": verified_count,
                 "pending_count": pending_count,
@@ -178,7 +239,7 @@ def get_map_summary(db: Session = Depends(get_db), _: User = Depends(get_current
         if building.latitude is not None and building.longitude is not None
     ]
 
-    total_consumption = sum(reading_differential(reading) for reading in readings)
+    total_consumption = 0.0
 
     critical_buildings = 0
     high_buildings = 0
@@ -196,16 +257,17 @@ def get_map_summary(db: Session = Depends(get_db), _: User = Depends(get_current
             reading for reading in readings if reading.meter_id in meter_ids
         ]
 
-        building_total = sum(
-            reading_differential(reading) for reading in building_readings
+        counted_rows, building_total = building_consumption(
+            building_meters, building_readings
         )
+        total_consumption += building_total
 
         building_floor_area = float(building.floor_area or 0)
 
         status = get_energy_status(
             building_total,
             building_floor_area,
-            reading_span_days(building_readings),
+            reading_span_days(counted_rows),
         )
 
         if status == "Critical":

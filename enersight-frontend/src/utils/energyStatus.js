@@ -122,6 +122,9 @@ export function annotateReadingCoverage(readings) {
  * never annualised, and every building in it read Normal. Readings without
  * `covers_from` fall back to their own date, which is the old measure.
  *
+ * Sub-meter readings are skipped: they count toward no total, so the days they
+ * cover are not the total's days either (utils/consumption.js).
+ *
  * Uses a loop rather than Math.max(...array), which blows the call stack once a
  * building has tens of thousands of readings.
  */
@@ -134,6 +137,10 @@ export function getReadingSpanDays(readings) {
   let latest = -Infinity;
 
   for (const reading of readings) {
+    if (reading.is_submeter) {
+      continue;
+    }
+
     const time = new Date(reading.reading_date).getTime();
 
     if (!Number.isFinite(time)) {

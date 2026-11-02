@@ -686,7 +686,7 @@ function ConsumptionTab({ profile, rate }) {
       <EmptyState
         icon={BarChart3}
         title="No consumption recorded yet"
-        description="Monthly consumption appears once this building's meters have readings."
+        description="A month appears once this building's readings cover it from start to end."
       />
     );
   }
@@ -813,8 +813,12 @@ function MetersTab({ profile }) {
             <span className="truncate font-semibold text-slate-950">{meter.serial_no || `#${meter.meter_id}`}</span>
             <span className="min-w-0 text-slate-700">
               <span className="block truncate">{meter.meter_type || "—"}</span>
-              {meter.meter_category && (
-                <span className="block truncate text-xs text-slate-400">{meter.meter_category}</span>
+              {(meter.is_submeter || meter.multiplier !== 1) && (
+                <span className="block truncate text-xs text-slate-400">
+                  {[meter.is_submeter && "Sub-meter", meter.multiplier !== 1 && `×${meter.multiplier}`]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
               )}
             </span>
             <span>
@@ -841,7 +845,12 @@ function MetersTab({ profile }) {
             <span className="tabular-nums text-slate-700">{meter.readingCount}</span>
             <span className="min-w-0">
               <span className="block tabular-nums font-semibold text-slate-950">{formatNumber(meter.consumption)} kWh</span>
-              <span className="block text-xs text-slate-400">{Math.round(meter.share * 100)}% of total</span>
+              <span className="block text-xs text-slate-400">
+                {/* Its energy is already on the meter it is wired after. */}
+                {meter.is_submeter
+                  ? `not added · ${Math.round(meter.share * 100)}% of total`
+                  : `${Math.round(meter.share * 100)}% of total`}
+              </span>
             </span>
           </div>
         ))}
@@ -913,7 +922,10 @@ function ReadingsTab({ profile }) {
             <span className="truncate text-slate-700">{reading.serial_no}</span>
             <span className="tabular-nums text-slate-700">{formatNumber(reading.previous_reading)}</span>
             <span className="tabular-nums text-slate-700">{formatNumber(reading.reading_value)}</span>
-            <span className="tabular-nums font-semibold text-slate-950">{formatNumber(reading.differential)}</span>
+            <span className="tabular-nums font-semibold text-slate-950">
+              {/* A meter's starting point adds no kWh (utils/consumption.js). */}
+              {reading.is_baseline ? "Start" : formatNumber(reading.differential)}
+            </span>
             <span className="tabular-nums text-slate-700">{formatPeso(reading.cost, { decimals: 0 })}</span>
             <span>
               <SourceBadge reading={reading} />

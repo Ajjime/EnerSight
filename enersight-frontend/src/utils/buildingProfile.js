@@ -10,14 +10,19 @@
 
 import {
   MIN_DAYS_TO_ANNUALIZE,
-  annotateReadingCoverage,
   annualizeEui,
   computeEui,
   getEnergyStatus,
   getReadingSpanDays,
 } from "./energyStatus";
 import { applianceKwhMonth } from "./currency";
-import { fillMonthGaps, MONTH_LABELS } from "./forecast";
+import {
+  buildCalendarMonths,
+  getMeterMultiplier,
+  isSubMeter,
+  prepareReadings,
+  sumKwh,
+} from "./consumption";
 import {
   getAverageOcrAccuracy,
   getOcrScore,
@@ -57,63 +62,17 @@ function toTime(value) {
   return Number.isFinite(time) ? time : null;
 }
 
-function getMonthSortKey(value) {
-  const time = toTime(value);
-
-  if (time === null) {
-    return "";
-  }
-
-  const date = new Date(time);
-
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function getMonthLabel(sortKey) {
-  const [year, month] = sortKey.split("-").map(Number);
-
-  return `${MONTH_LABELS[month - 1]} ${year}`;
-}
-
-/** present − previous, never negative. Same rule as reading_differential in the backend. */
-export function getReadingDifferential(reading) {
-  const present = Number(reading?.reading_value || 0);
-  const previous = Number(reading?.previous_reading ?? 0);
-
-  return Math.max(present - previous, 0);
-}
-
 /**
- * Monthly measured kWh, oldest first, with empty calendar months kept at zero so
- * the chart spacing is real time (see fillMonthGaps).
+ * Monthly measured kWh, oldest first, for complete calendar months (each
+ * reading's kWh spread over the days it covers; see buildCalendarMonths). Takes
+ * prepared readings (prepareReadings).
  */
 export function buildMonthlyConsumption(readings, rate = 0) {
-  const grouped = new Map();
-
-  (readings || []).forEach((reading) => {
-    const sortKey = getMonthSortKey(reading.reading_date);
-
-    if (!sortKey) {
-      return;
-    }
-
-    if (!grouped.has(sortKey)) {
-      grouped.set(sortKey, { sortKey, month: getMonthLabel(sortKey), value: 0, readingCount: 0 });
-    }
-
-    const point = grouped.get(sortKey);
-    point.value += getReadingDifferential(reading);
-    point.readingCount += 1;
-  });
-
-  const points = [...grouped.values()].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-
-  return fillMonthGaps(points).map((point, index, all) => {
+  return buildCalendarMonths(readings).map((point, index, all) => {
     const previous = index > 0 ? all[index - 1].value : null;
 
     return {
       ...point,
-      readingCount: point.readingCount || 0,
       cost: point.value * rate,
       change: previous > 0 ? (point.value - previous) / previous : null,
     };
@@ -218,17 +177,15 @@ export function buildBuildingProfile({
   const buildingMeters = meters.filter((meter) => Number(meter.building_id) === buildingId);
   const meterById = new Map(buildingMeters.map((meter) => [Number(meter.meter_id), meter]));
 
-  const buildingReadings = annotateReadingCoverage(
-    readings.filter((reading) => meterById.has(Number(reading.meter_id)))
+  const buildingReadings = prepareReadings(
+    readings.filter((reading) => meterById.has(Number(reading.meter_id))),
+    buildingMeters
   ).map((reading) => {
-    const differential = getReadingDifferential(reading);
-
     return {
       ...reading,
       ocr_accuracy: getOcrScore(reading.ocr_accuracy),
       is_verified: Boolean(reading.is_verified),
-      differential,
-      cost: differential * rate,
+      cost: reading.differential * rate,
       serial_no: meterById.get(Number(reading.meter_id))?.serial_no || `Meter #${reading.meter_id}`,
     };
   });
@@ -240,7 +197,8 @@ export function buildBuildingProfile({
       Number(b.record_id) - Number(a.record_id)
   );
 
-  const totalConsumption = buildingReadings.reduce((sum, reading) => sum + reading.differential, 0);
+  // Sub-meters left out: their energy is already on the meter they are wired after.
+  const totalConsumption = sumKwh(buildingReadings);
   const spanDays = getReadingSpanDays(buildingReadings);
   const isAnnualized = spanDays >= MIN_DAYS_TO_ANNUALIZE;
   const rawEui = computeEui(totalConsumption, floorArea);
@@ -256,6 +214,8 @@ export function buildBuildingProfile({
 
       return {
         ...meter,
+        multiplier: getMeterMultiplier(meter),
+        is_submeter: isSubMeter(meter),
         readingCount: meterReadings.length,
         consumption,
         share: totalConsumption > 0 ? consumption / totalConsumption : 0,
@@ -281,8 +241,7 @@ export function buildBuildingProfile({
   const estimatedKwhMonth = applianceRows.reduce((sum, appliance) => sum + appliance.kwhMonth, 0);
 
   const monthly = buildMonthlyConsumption(buildingReadings, rate);
-  const recordedMonths = monthly.filter((point) => !point.isGap);
-  const peakMonth = recordedMonths.reduce(
+  const peakMonth = monthly.reduce(
     (peak, point) => (!peak || point.value > peak.value ? point : peak),
     null
   );

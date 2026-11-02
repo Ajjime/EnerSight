@@ -39,6 +39,14 @@ export const GLOSSARY = {
       "Two months of readings and two years of readings can then be compared on the same scale. Spans under 20 days are left alone, because scaling them up exaggerates.",
   },
 
+  monthlyKwh: {
+    term: "Monthly kWh",
+    definition:
+      "Each reading's kWh spread evenly over the days since the meter's previous reading, then added up by calendar month.",
+    soWhat:
+      "A month shows once every meter has been read past its end, so this month appears after next month's readings are in.",
+  },
+
   measuredVsEstimated: {
     term: "Measured vs estimated",
     definition:

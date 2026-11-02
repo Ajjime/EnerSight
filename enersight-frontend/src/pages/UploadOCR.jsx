@@ -42,6 +42,7 @@ import {
   getRecentMonths,
 } from "../utils/meterRounds";
 import { SERVER_UNREACHABLE, describeError } from "../utils/messages";
+import { getMeterMultiplier, prepareReadings, sumKwh } from "../utils/consumption";
 
 // How many months the reading-period picker offers, the current one first.
 const PERIOD_MONTHS = 6;
@@ -83,6 +84,10 @@ function normalizeMeter(meter) {
     serial_no: meter.serial_no || "",
     meter_type: meter.meter_type || meter.meter_category || "Digital",
     status: meter.status || "Active",
+    // Read by prepareReadings (utils/consumption.js).
+    multiplier: meter.multiplier,
+    is_submeter: Boolean(meter.is_submeter),
+    created_at: meter.created_at || null,
   };
 }
 
@@ -95,7 +100,6 @@ function normalizeReading(reading) {
     user_id: reading.user_id,
     reading_value: presentReading,
     previous_reading: previousReading,
-    differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "No image attached",
     ocr_accuracy: getOcrScore(reading.ocr_accuracy),
@@ -332,7 +336,8 @@ function ReadingDetailsModal({ reading, meters, buildings, onClose }) {
               kWh Consumed
             </p>
             <p className="mt-2 text-2xl font-bold text-emerald-900">
-              {formatNumber(Math.max(reading.reading_value - (reading.previous_reading ?? 0), 0))} kWh
+              {/* A meter's starting point adds no kWh (utils/consumption.js). */}
+              {reading.is_baseline ? "Start" : `${formatNumber(reading.differential)} kWh`}
             </p>
           </div>
 
@@ -572,7 +577,7 @@ const UploadOCR = () => {
 
       setMeters(meterData);
       setBuildings(buildingData);
-      setReadings(readingData);
+      setReadings(prepareReadings(readingData, meterData));
 
       // Start on the first meter still to read this month, so the page opens on
       // the next job rather than on whichever meter happens to be first.
@@ -734,9 +739,11 @@ const UploadOCR = () => {
     [rounds, form.meter_id]
   );
 
+  const multiplier = getMeterMultiplier(selectedMeter);
+
   const meterHistory = useMemo(
-    () => getMeterHistory(readings, form.meter_id, 5),
-    [readings, form.meter_id]
+    () => getMeterHistory(readings, form.meter_id, 5, multiplier),
+    [readings, form.meter_id, multiplier]
   );
 
   const meterReadPercent =
@@ -753,10 +760,8 @@ const UploadOCR = () => {
     [readings, period]
   );
 
-  const periodKwh = periodReadings.reduce(
-    (sum, reading) => sum + reading.differential,
-    0
-  );
+  // Sub-meters left out, as in every other total.
+  const periodKwh = sumKwh(periodReadings);
 
   // The present reading checked against the meter's own history. Shown as the
   // value changes, so it catches an OCR misread and a typo the same way.
@@ -781,6 +786,8 @@ const UploadOCR = () => {
             readingDate: form.reading_date,
             usualDailyUse,
             serialNo: selectedMeter?.serial_no,
+            isFirstReading,
+            multiplier,
           })
         : [],
     [
@@ -792,6 +799,7 @@ const UploadOCR = () => {
       latestMeterReading,
       usualDailyUse,
       selectedMeter,
+      multiplier,
     ]
   );
 
@@ -829,7 +837,7 @@ const UploadOCR = () => {
 
   const consumptionKwh =
     form.reading_value && form.meter_id
-      ? Math.max(Number(form.reading_value) - previousReadingValue, 0)
+      ? Math.max(Number(form.reading_value) - previousReadingValue, 0) * multiplier
       : null;
 
   // Days since the meter's last reading, for the kWh-per-day line. A first
@@ -1077,7 +1085,11 @@ const UploadOCR = () => {
   }
 
   async function saveReading({ confirmed = false } = {}) {
-    const validationError = getReadingFormError(form, previousReadingValue);
+    const validationError = getReadingFormError(
+      form,
+      previousReadingValue,
+      isFirstReading ? null : latestMeterReading?.reading_date
+    );
 
     if (validationError) {
       showToast(validationError, "error");
@@ -2102,7 +2114,7 @@ const UploadOCR = () => {
 //
 // The backend enforces the same rules in apply_reading_rules; this copy exists to
 // give immediate feedback, not to be the only gate.
-function getReadingFormError(form, previousReading) {
+function getReadingFormError(form, previousReading, latestReadingDate = null) {
   if (!form.meter_id) {
     return "Please select the meter this reading belongs to.";
   }
@@ -2146,6 +2158,16 @@ function getReadingFormError(form, previousReading) {
     // A minute of slack so a device clock running slightly fast doesn't block a save.
     if (readingDate.getTime() > Date.now() + 60000) {
       return "The reading date cannot be in the future.";
+    }
+
+    // Each reading measures from the one before it, so they go in date order.
+    const latest = latestReadingDate ? new Date(latestReadingDate) : null;
+
+    if (latest && !Number.isNaN(latest.getTime()) && readingDate < latest) {
+      return (
+        "This reading is dated before the meter's latest reading " +
+        `(${latest.toLocaleDateString()}). Readings go in date order.`
+      );
     }
   }
 

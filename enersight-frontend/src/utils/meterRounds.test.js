@@ -123,6 +123,13 @@ describe("getMeterHistory", () => {
   it("stops at the limit", () => {
     expect(getMeterHistory(readings, 1, 1)).toHaveLength(1);
   });
+
+  it("gives kWh through the meter's multiplier", () => {
+    const history = getMeterHistory(readings, 1, 5, 40);
+
+    expect(history[0].used).toBe(336 * 40);
+    expect(history[0].perDay).toBeCloseTo(11.2 * 40);
+  });
 });
 
 describe("daysBetween", () => {

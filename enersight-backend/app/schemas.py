@@ -1,7 +1,29 @@
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainSerializer
+
+
+def utc_isoformat(value: Optional[datetime]) -> Optional[str]:
+    """ISO 8601 with a trailing Z.
+
+    The columns are naive and hold UTC (the routes convert on the way in, and the
+    defaults are utcnow). Sent without a zone, "2026-10-31T23:00:00" is read by a
+    browser as local time, so in the Philippines every reading showed 8 hours early
+    and one taken before 8 AM on the 1st landed in the previous month.
+    """
+    if value is None:
+        return None
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# A stored (naive UTC) datetime, sent marked as UTC. Use it for every datetime a
+# response returns.
+UtcDateTime = Annotated[datetime, PlainSerializer(utc_isoformat, return_type=str)]
 
 
 class UserCreate(BaseModel):
@@ -62,12 +84,27 @@ class MeterCreate(BaseModel):
     meter_category: Optional[str] = None
     installation_date: Optional[str] = None
     initial_reading: Optional[float] = 0.0
+    # kWh per unit the register advances: 40 for a meter on 200:5 current
+    # transformers, 0.1 when the display's last digit is tenths. 1 for a meter
+    # whose display is already kWh, which is the default.
+    multiplier: float = Field(default=1.0, gt=0, le=100000)
+    # Wired after another meter of the same building, so its energy is already
+    # counted there. Shown in the building's breakdown, left out of its total.
+    is_submeter: bool = False
 
 
 class MeterResponse(MeterCreate):
     meter_id: int
     latest_reading: Optional[float] = None
     previous_reading: Optional[float] = None
+    has_readings: bool = False
+    # When the meter was added. Its first reading's kWh run from here, since the
+    # starting reading was entered at that moment.
+    created_at: Optional[UtcDateTime] = None
+    # Rows added before the column existed hold NULL until the startup ALTER fills
+    # them; read those as the defaults.
+    multiplier: Optional[float] = 1.0
+    is_submeter: Optional[bool] = False
 
     class Config:
         from_attributes = True
@@ -138,7 +175,7 @@ class ReadingCreate(BaseModel):
 
 class ReadingResponse(ReadingCreate):
     record_id: int
-    reading_date: datetime
+    reading_date: UtcDateTime
     # Output only; see the note on ReadingCreate.
     user_id: Optional[int] = None
     is_verified: bool = False
@@ -176,7 +213,7 @@ class ReportResponse(BaseModel):
     total_consumption: float = 0
     average_consumption: float = 0
     peak_consumption: float = 0
-    generated_at: datetime
+    generated_at: UtcDateTime
 
     class Config:
         from_attributes = True

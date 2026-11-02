@@ -124,6 +124,27 @@ describe("checkReadingPlausibility", () => {
     expect(visionCheck("71847", { previousDate: null })).toEqual([]);
   });
 
+  it("warns when a meter's first reading starts from 0", () => {
+    // The validation case: a running meter showing 11,847 with its starting value
+    // left at 0 counted all of it as one period's use.
+    const first = { previousValue: 0, previousDate: null, usualDailyUse: null, isFirstReading: true };
+    const issues = visionCheck("11847", first);
+
+    expect(codes(issues)).toEqual(["start"]);
+    expect(issues[0].blocking).toBe(false);
+    expect(issues[0].message).toMatch(/11,847 kWh/);
+    // A real starting value, or a later reading, is not a "start" issue.
+    expect(visionCheck("11847", { ...first, previousValue: 11800 })).toEqual([]);
+    expect(codes(visionCheck("11861", { isFirstReading: false }))).toEqual([]);
+  });
+
+  it("gives the jump message in kWh through the multiplier", () => {
+    const [issue] = visionCheck("71847", { multiplier: 40 });
+
+    expect(issue.code).toBe("jump");
+    expect(issue.message).toMatch(/usual 120 kWh/);
+  });
+
   it("says nothing about an empty or non-numeric value", () => {
     expect(visionCheck("")).toEqual([]);
     expect(visionCheck(undefined)).toEqual([]);

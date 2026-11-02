@@ -34,6 +34,8 @@ const emptyForm = {
   meter_type: "Digital",
   status: "Active",
   initial_reading: "",
+  multiplier: "1",
+  is_submeter: false,
 };
 
 const meterTypes = ["Digital", "Analog"];
@@ -49,6 +51,9 @@ function normalizeMeter(meter) {
     initial_reading: meter.initial_reading ?? "",
     latest_reading: meter.latest_reading ?? null,
     previous_reading: meter.previous_reading ?? null,
+    multiplier: String(Number(meter.multiplier) > 0 ? meter.multiplier : 1),
+    is_submeter: Boolean(meter.is_submeter),
+    has_readings: Boolean(meter.has_readings),
   };
 }
 
@@ -135,6 +140,9 @@ function MeterModal({
   }
 
   const isView = modal.mode === "view";
+  // The starting reading is what the first reading's kWh are measured from, so it
+  // stays editable until that reading exists.
+  const canEditStart = modal.mode === "add" || (modal.mode === "edit" && !form.has_readings);
 
   return (
     <div className="fixed inset-0 z-[50000] flex items-center justify-center bg-slate-950/60 p-4">
@@ -240,18 +248,20 @@ function MeterModal({
             </Field>
 
             <Field
-              label="Previous Meter Reading (kWh)"
+              label="Starting Reading"
               helper={
-                modal.mode === "add"
-                  ? "Enter the base/starting reading of this meter."
-                  : "This value was set when the meter was added and cannot be changed."
+                canEditStart
+                  ? "The number on the display today. 0 only for a brand-new meter."
+                  : isView
+                  ? null
+                  : "Fixed once the meter has readings."
               }
             >
               <input
                 type="number"
                 min="0"
                 step="any"
-                disabled={modal.mode !== "add"}
+                disabled={!canEditStart}
                 value={form.initial_reading}
                 onChange={(event) =>
                   setForm({ ...form, initial_reading: event.target.value })
@@ -259,6 +269,40 @@ function MeterModal({
                 placeholder="e.g. 12345.00"
                 className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               />
+            </Field>
+
+            <Field
+              label="Multiplier"
+              helper={isView ? null : "1 unless the nameplate or bill gives one (e.g. 40 for 200:5 CTs)."}
+            >
+              <input
+                type="number"
+                min="0"
+                step="any"
+                disabled={isView}
+                value={form.multiplier}
+                onChange={(event) =>
+                  setForm({ ...form, multiplier: event.target.value })
+                }
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+              />
+            </Field>
+
+            <Field
+              label="Wiring"
+              helper={isView ? null : "A sub-meter is left out of the building total."}
+            >
+              <select
+                disabled={isView}
+                value={form.is_submeter ? "sub" : "main"}
+                onChange={(event) =>
+                  setForm({ ...form, is_submeter: event.target.value === "sub" })
+                }
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                <option value="main">Main meter (own supply)</option>
+                <option value="sub">Sub-meter (after another meter here)</option>
+              </select>
             </Field>
           </div>
         </div>
@@ -494,6 +538,24 @@ const MetersPage = ({ role = "Staff" }) => {
       return false;
     }
 
+    // A blank used to save as 0, and a meter that was already running then
+    // counted its whole lifetime register as used since it was added.
+    const start = String(form.initial_reading ?? "").trim();
+    const startEditable = modal?.mode === "add" || !form.has_readings;
+
+    if (
+      startEditable &&
+      (start === "" || !Number.isFinite(Number(start)) || Number(start) < 0)
+    ) {
+      showToast("Please enter the starting reading (0 only for a brand-new meter).", "error");
+      return false;
+    }
+
+    if (!(Number(form.multiplier) > 0)) {
+      showToast("The multiplier must be more than 0 (1 for most meters).", "error");
+      return false;
+    }
+
     return true;
   }
 
@@ -503,7 +565,9 @@ const MetersPage = ({ role = "Staff" }) => {
       building_id: Number(meterForm.building_id),
       meter_type: meterForm.meter_type,
       status: meterForm.status,
-      initial_reading: meterForm.initial_reading !== "" ? Number(meterForm.initial_reading) : 0,
+      initial_reading: Number(meterForm.initial_reading),
+      multiplier: Number(meterForm.multiplier),
+      is_submeter: Boolean(meterForm.is_submeter),
     };
   }
 

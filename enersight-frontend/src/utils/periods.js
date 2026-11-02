@@ -116,6 +116,16 @@ export function isInWindow(readingDate, window) {
   return Number.isFinite(time) && time >= window.start && time < window.end;
 }
 
+/** True when the calendar month "YYYY-MM" overlaps the window (null: no limit). */
+export function isMonthInWindow(sortKey, window) {
+  if (!window) return true;
+  const [year, month] = String(sortKey).split("-").map(Number);
+  if (!year || !month) return false;
+  const start = new Date(year, month - 1, 1).getTime();
+  const end = new Date(year, month, 1).getTime();
+  return start < window.end && end > window.start;
+}
+
 /** A custom range whose start is after its end. Both inputs are "YYYY-MM-DD". */
 export function isInvalidCustomRange(period, customFrom, customTo) {
   return (

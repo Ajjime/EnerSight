@@ -47,7 +47,7 @@ LocationPickerModal and UploadOCR.
 
 - **EUI status** (kWh/m²/yr): High > 150, Critical > 250. Intensity is annualised over the
   days the readings cover: each reading's `covers_from` is the same meter's previous
-  reading date (`annotateReadingCoverage`, call it before any period filter). Spans under
+  reading date (`prepareReadings`, call it on the full list before any period filter). Spans under
   `MIN_DAYS_TO_ANNUALIZE` (20 days) are not annualised. Lives in
   `src/utils/energyStatus.js` and is mirrored in `enersight-backend/app/routes/map.py`;
   `energyStatus.test.js` reads map.py and fails if the two drift, so change both.
@@ -70,6 +70,21 @@ LocationPickerModal and UploadOCR.
   from meter readings; estimated = appliances, `watts × quantity × hours/day × days/month
   ÷ 1000`. Cost = kWh × one global rate (`settings` table `rate_per_kwh`, default ₱12;
   backend `get_rate_per_kwh`, frontend `useElectricityRate`).
+- **kWh from readings (EE review, Nov 3 2026):** `prepareReadings`/`sumKwh` in
+  `utils/consumption.js` are the only place a reading becomes kWh; `metered_readings`
+  and `building_consumption` in `routes/map.py` mirror them (`consumption.test.js`
+  checks). kWh = (present − previous) × the meter's `multiplier` (CT ratio, 0.1 for a
+  tenths digit, default 1). A meter with `is_submeter` (wired after another meter of the
+  same building) keeps its own kWh in the breakdown but is left out of every total and
+  span. A meter's first reading covers from the meter's `created_at` when that is
+  earlier; otherwise it is the meter's starting point (`is_baseline`, 0 kWh, shown as
+  "Start"). Demo meters are all main meters: the EUI targets are tuned on their sum.
+- **Reading chain:** readings go in date order per meter (create refuses one dated
+  before the meter's latest). Deleting a reading hands its `previous_reading` to the
+  next one and editing a value updates the next one's, so the intervals always add up
+  to last − first register. The starting reading is required on Add Meter and locked
+  once the meter has readings; a first reading with a starting value of 0 gets a
+  "save anyway?" warning (`start` in readingPlausibility.js).
 - **Expected EUI (appliances on the EUI scale):** `getApplianceEui` in
   `utils/buildingProfile.js` = appliance kWh/month × 12 ÷ floor area, graded on the
   same bands (`getApplianceStatus`); each appliance gets its share in kWh/m²/yr. It is
@@ -90,6 +105,13 @@ LocationPickerModal and UploadOCR.
   a 6-month baseline (at 3 months the moving average compared with itself and read
   "Steady" forever). `components/ForecastChart.jsx` draws the leading method only on the
   Dashboard and all three on Analytics.
+  Its input, and every monthly chart, is `buildCalendarMonths` (utils/consumption.js):
+  each reading's kWh spread over the days it covers, complete months only, and a meter
+  more than `STALE_METER_DAYS` (45) behind the newest reading does not hold the last
+  month back. `evaluate_forecast.py` mirrors it. Before this, a skipped reading showed
+  as a month of 0 then a double one. Table 4 re-run on Nov 3 2026: WMA still lowest
+  MAPE (4.40% → 4.47%). Period totals (This Month etc.) still count the readings
+  dated in the period, annualised over the days they cover.
   Shared constants stay in `utils/` because a .jsx that exports constants fails the
   react-refresh lint rule.
 
@@ -201,6 +223,10 @@ LocationPickerModal and UploadOCR.
   `Analytics.jsx` and `BuildingMap.jsx`, are LF. An edit script that assumes either
   one silently matches nothing. Detect per file before splitting, and split on
   `/\r?\n/` in JS.
+- **Dates are stored as naive UTC and sent with a `Z`** (`UtcDateTime` and
+  `utc_isoformat` in schemas.py). Use them for any datetime a response returns. Sent
+  without the `Z`, the browser read them as local time: 8 hours early in the
+  Philippines. The seed plans in local time and stores through `to_stored_utc`.
 - PowerShell `Get-Content`/`Set-Content` mangles UTF-8 (`·`, `²`, `₱`). Use
   `[System.IO.File]::ReadAllText` / `WriteAllText`.
 - `seed_demo_data.py` defaults the Admin password to `EnerSight2026!`. The user chose to

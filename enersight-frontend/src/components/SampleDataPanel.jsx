@@ -57,11 +57,11 @@ async function loadSamples() {
     idByName.set(sample.name.toLowerCase().trim(), created.building_id);
   }
 
-  for (const { serial, index, buildingName } of plan.meters) {
+  for (const { serial, buildingName } of plan.meters) {
     const buildingId = idByName.get(buildingName.toLowerCase().trim());
     await send("/meters/", {
       method: "POST",
-      body: JSON.stringify(sampleMeterPayload(serial, buildingId, index)),
+      body: JSON.stringify(sampleMeterPayload(serial, buildingId)),
     });
   }
 

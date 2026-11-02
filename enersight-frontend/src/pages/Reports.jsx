@@ -29,7 +29,6 @@ import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import {
   MIN_DAYS_TO_ANNUALIZE,
-  annotateReadingCoverage,
   annualizeEui,
   computeEui,
   getEnergyStatus,
@@ -42,6 +41,7 @@ import {
   isLowOcrAccuracy,
 } from "../utils/readingQuality";
 import { formatPeso } from "../utils/currency";
+import { countsTowardTotal, prepareReadings, sumKwh } from "../utils/consumption";
 import StatCard from "../components/StatCard";
 import EmptyState from "../components/EmptyState";
 import InfoHint from "../components/InfoHint";
@@ -75,7 +75,24 @@ function normalizeMeter(meter) {
     serial_no: meter.serial_no || "",
     meter_type: meter.meter_type || "Digital",
     status: meter.status || "Active",
+    // Read by prepareReadings (utils/consumption.js).
+    multiplier: meter.multiplier,
+    is_submeter: Boolean(meter.is_submeter),
+    created_at: meter.created_at || null,
   };
+}
+
+/** The largest single reading's kWh, sub-meters left out like every total. */
+function getPeakKwh(readings) {
+  let peak = 0;
+
+  for (const reading of readings) {
+    if (countsTowardTotal(reading) && reading.differential > peak) {
+      peak = reading.differential;
+    }
+  }
+
+  return peak;
 }
 
 function normalizeReading(reading) {
@@ -87,7 +104,6 @@ function normalizeReading(reading) {
     user_id: reading.user_id,
     reading_value: presentReading,
     previous_reading: previousReading,
-    differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     image_path: reading.image_path || "No image attached",
     ocr_accuracy: getOcrScore(reading.ocr_accuracy),
@@ -770,9 +786,9 @@ const Reports = () => {
       setBuildings(buildingData);
       setMeters(meterData);
       loadSavedReports();
-      // Stamped on the full list, before the period filter can drop the previous
+      // Prepared on the full list, before the period filter can drop the previous
       // reading that each one's time window is measured from.
-      setReadings(annotateReadingCoverage(readingData));
+      setReadings(prepareReadings(readingData, meterData));
 
       if (showSuccessToast) {
         showToast("Reports data refreshed successfully.", "success");
@@ -824,10 +840,7 @@ const Reports = () => {
     });
   }, [readings, buildingFilter, currentWindow, query, getBuildingName, getMeter]);
 
-  const totalConsumption = filteredReadings.reduce(
-    (sum, reading) => sum + reading.differential,
-    0
-  );
+  const totalConsumption = sumKwh(filteredReadings);
 
   const totalCost = totalConsumption * rate;
 
@@ -840,9 +853,7 @@ const Reports = () => {
       ? totalConsumption / (overallSpanDays / DAYS_PER_MONTH)
       : null;
 
-  const highestReading = filteredReadings.length
-    ? Math.max(...filteredReadings.map((reading) => reading.differential))
-    : 0;
+  const highestReading = getPeakKwh(filteredReadings);
 
   const verifiedCount = filteredReadings.filter(
     (reading) => reading.is_verified
@@ -866,10 +877,7 @@ const Reports = () => {
           meterIds.includes(Number(reading.meter_id))
         );
 
-        const buildingTotal = buildingReadings.reduce(
-          (sum, reading) => sum + reading.differential,
-          0
-        );
+        const buildingTotal = sumKwh(buildingReadings);
 
         // Per month and EUI use the days these readings cover, the same basis the
         // status is graded on.
@@ -879,9 +887,7 @@ const Reports = () => {
           ? buildingTotal / (spanDays / DAYS_PER_MONTH)
           : null;
 
-        const buildingHighest = buildingReadings.length
-          ? Math.max(...buildingReadings.map((reading) => reading.differential))
-          : 0;
+        const buildingHighest = getPeakKwh(buildingReadings);
 
         const buildingVerified = buildingReadings.filter(
           (reading) => reading.is_verified

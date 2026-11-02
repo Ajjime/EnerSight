@@ -53,6 +53,10 @@ class Meter(Base):
     meter_category = Column(String, nullable=True)
     installation_date = Column(String, nullable=True)
     initial_reading = Column(Float, nullable=True, default=0.0)
+    # kWh = (present - previous) x multiplier. See schemas.MeterCreate.
+    multiplier = Column(Float, nullable=True, default=1.0)
+    # Wired after another meter of the same building: left out of its total.
+    is_submeter = Column(Boolean, nullable=True, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     building = relationship("Building", back_populates="meters")

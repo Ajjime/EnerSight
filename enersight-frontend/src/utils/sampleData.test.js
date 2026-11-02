@@ -33,12 +33,16 @@ describe("samplesToAdd", () => {
     expect(plan.meters.map((m) => m.serial)).not.toContain("DNSC-ICT-01");
   });
 
-  it("marks the first meter of a building as its main meter", () => {
-    expect(sampleMeterPayload("DNSC-ICT-01", "5", 0)).toMatchObject({
+  it("makes every sample meter a main meter, so each counts toward its building", () => {
+    expect(sampleMeterPayload("DNSC-ICT-01", "5")).toMatchObject({
       building_id: 5,
       meter_category: "Main",
+      is_submeter: false,
     });
-    expect(sampleMeterPayload("DNSC-ICT-02", 5, 1).meter_category).toBe("Sub");
+    expect(sampleMeterPayload("DNSC-ICT-02", 5)).toMatchObject({
+      meter_category: "Main",
+      is_submeter: false,
+    });
   });
 });
 

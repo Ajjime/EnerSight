@@ -27,6 +27,8 @@ def get_meters(db: Session = Depends(get_db), _: User = Depends(get_current_user
             .first()
         )
 
+        meter.has_readings = last is not None
+
         if last:
             meter.latest_reading = float(last.reading_value or 0.0)
             meter.previous_reading = float(last.previous_reading or 0.0)
@@ -125,7 +127,31 @@ def update_meter(
     if existing_meter:
         raise HTTPException(status_code=400, detail="Meter serial number already exists")
 
-    for key, value in updated_meter.model_dump().items():
+    # Only what the client sent. A full dump reset every field it left out to the
+    # schema default, so an edit form without a multiplier would quietly put a
+    # 40x meter back to 1x.
+    changes = updated_meter.model_dump(exclude_unset=True)
+
+    # The starting reading is the base the first reading's kWh are measured from.
+    # Once a reading has used it, changing it would rewrite nothing (the reading
+    # keeps its own previous value) and only make the record disagree with itself.
+    new_initial = changes.get("initial_reading")
+
+    if new_initial is not None and float(new_initial) != float(meter.initial_reading or 0.0):
+        has_readings = (
+            db.query(models.ConsumptionRecord)
+            .filter(models.ConsumptionRecord.meter_id == meter_id)
+            .first()
+            is not None
+        )
+
+        if has_readings:
+            raise HTTPException(
+                status_code=400,
+                detail="The starting reading cannot change once the meter has readings.",
+            )
+
+    for key, value in changes.items():
         setattr(meter, key, value)
 
     audit.log_action(

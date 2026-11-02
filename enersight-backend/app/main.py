@@ -45,6 +45,12 @@ Base.metadata.create_all(bind=engine)
 # only: nothing here drops, renames or rewrites data.
 _ADDED_COLUMNS = {
     "consumption_records": {"ocr_reading": "VARCHAR"},
+    # The DEFAULT also fills the rows already there, so existing meters read as
+    # multiplier 1 and not a sub-meter: their kWh do not change.
+    "meters": {
+        "multiplier": "DOUBLE PRECISION DEFAULT 1",
+        "is_submeter": "BOOLEAN DEFAULT FALSE",
+    },
 }
 
 

@@ -90,14 +90,20 @@ export function sampleBuildingPayload(sample) {
   };
 }
 
-/** POST /meters/ body for a sample meter; the first meter of a building is its main one. */
-export function sampleMeterPayload(serial, buildingId, index = 0) {
+/**
+ * POST /meters/ body for a sample meter. Every sample meter is a main meter on its
+ * own supply, so each one counts toward its building's total. (They used to be
+ * "Main" and "Sub", but nothing treated a "Sub" as wired after the main, and the
+ * demo's grades are tuned on the sum of all of them.)
+ */
+export function sampleMeterPayload(serial, buildingId) {
   return {
     serial_no: serial,
     building_id: Number(buildingId),
     meter_type: "Digital",
     status: "Active",
-    meter_category: index === 0 ? "Main" : "Sub",
+    meter_category: "Main",
+    is_submeter: false,
   };
 }
 

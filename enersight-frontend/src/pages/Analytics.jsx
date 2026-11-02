@@ -26,7 +26,6 @@ import { applianceKwhMonth, formatPeso } from "../utils/currency";
 import {
   FORECAST_COLORS,
   buildForecastModel,
-  fillMonthGaps,
   getForecastDirection,
   getNextMonthLabelsFromKey,
 } from "../utils/forecast";
@@ -60,7 +59,6 @@ import {
   EUI_CRITICAL_THRESHOLD,
   EUI_HIGH_THRESHOLD,
   MIN_DAYS_TO_ANNUALIZE,
-  annotateReadingCoverage,
   annualizeEui,
   computeEui,
   getEnergyStatus,
@@ -84,7 +82,14 @@ import {
   getPeriodWindows,
   isInWindow,
   isInvalidCustomRange,
+  isMonthInWindow,
 } from "../utils/periods";
+import {
+  buildCalendarMonths,
+  countsTowardTotal,
+  prepareReadings,
+  sumKwh,
+} from "../utils/consumption";
 import { describeError } from "../utils/messages";
 const AUTO_REFRESH_MS = 60000;
 const DAYS_PER_MONTH = 365 / 12;
@@ -134,6 +139,10 @@ function normalizeMeter(meter) {
     serial_no: meter.serial_no || "",
     meter_type: meter.meter_type || "Digital",
     status: meter.status || "Active",
+    // Read by prepareReadings (utils/consumption.js).
+    multiplier: meter.multiplier,
+    is_submeter: Boolean(meter.is_submeter),
+    created_at: meter.created_at || null,
   };
 }
 
@@ -146,7 +155,6 @@ function normalizeReading(reading) {
     user_id: reading.user_id,
     reading_value: presentReading,
     previous_reading: previousReading,
-    differential: Math.max(presentReading - previousReading, 0),
     reading_date: reading.reading_date || "",
     // null for a typed-in reading; see utils/readingQuality.js.
     ocr_accuracy: getOcrScore(reading.ocr_accuracy),
@@ -194,21 +202,6 @@ function getAccuracyStyle(accuracy) {
   if (score >= 90) return "border-emerald-100 bg-emerald-50 text-emerald-700";
   if (score >= 80) return "border-amber-100 bg-amber-50 text-amber-700";
   return "border-red-100 bg-red-50 text-red-700";
-}
-
-function getMonthLabel(readingDate) {
-  const date = new Date(readingDate);
-  return date.toLocaleString("en-US", { month: "short", year: "numeric" });
-}
-
-// Sortable "YYYY-MM" companion to the display label. Readings arrive newest-first
-// from the API, so the trend has to be ordered by this, not by arrival.
-function getMonthSortKey(readingDate) {
-  if (!readingDate) return "";
-  const date = new Date(readingDate);
-  if (Number.isNaN(date.getTime())) return "";
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${date.getFullYear()}-${month}`;
 }
 
 function formatPercent(fraction) {
@@ -644,9 +637,9 @@ const Analytics = () => {
       ]);
       setBuildings(buildingData);
       setMeters(meterData);
-      // Stamped on the full list, before the period filter can drop the previous
+      // Prepared on the full list, before the period filter can drop the previous
       // reading that each one's time window is measured from.
-      setReadings(annotateReadingCoverage(readingData));
+      setReadings(prepareReadings(readingData, meterData));
       setAppliances(applianceResult.list);
       setApplianceError(applianceResult.error);
     } catch (error) {
@@ -718,10 +711,7 @@ const Analytics = () => {
     return buildings.map((building) => {
       const buildingId = Number(building.building_id);
       const buildingReadings = readingsByBuilding.get(buildingId) || [];
-      const totalConsumption = buildingReadings.reduce(
-        (sum, reading) => sum + reading.differential,
-        0
-      );
+      const totalConsumption = sumKwh(buildingReadings);
       // The days these readings actually cover, so the status and EUI mean the
       // same thing whether the period is one month or three years.
       const spanDays = getReadingSpanDays(buildingReadings);
@@ -801,7 +791,7 @@ const Analytics = () => {
       if (!matchesBuildingFilter(buildingId)) return;
       if (statusFilter !== "All Status" && !matchingBuildingIds.has(buildingId)) return;
       if (!isInWindow(reading.reading_date, previousWindow)) return;
-      kwh += reading.differential;
+      if (countsTowardTotal(reading)) kwh += reading.differential;
       count += 1;
     });
 
@@ -815,31 +805,28 @@ const Analytics = () => {
     previousWindow,
   ]);
 
+  // Complete calendar months, each reading's kWh spread over the days it covers
+  // (utils/consumption.js), then kept where they overlap the period. Built from
+  // the building- and status-filtered readings rather than the period-filtered
+  // ones: October's kWh are only known once the readings after it are in.
   const monthlyTrend = useMemo(() => {
-    const grouped = {};
-    filteredReadings.forEach((reading) => {
-      // Undated readings cannot be placed on a timeline.
-      const sortKey = getMonthSortKey(reading.reading_date);
-      if (!sortKey) return;
-      if (!grouped[sortKey]) {
-        grouped[sortKey] = {
-          month: getMonthLabel(reading.reading_date),
-          sortKey,
-          value: 0,
-        };
-      }
-      grouped[sortKey].value += reading.differential;
+    const trendReadings = readings.filter((reading) => {
+      const buildingId = meterBuildingIds.get(Number(reading.meter_id));
+      if (!matchesBuildingFilter(buildingId)) return false;
+      return statusFilter === "All Status" || matchingBuildingIds.has(buildingId);
     });
-    const points = Object.values(grouped).sort((a, b) =>
-      a.sortKey.localeCompare(b.sortKey)
-    );
-    // A month with no readings stays on the axis at zero instead of vanishing, so
-    // the spacing between points is real time. See fillMonthGaps for why zero.
-    return fillMonthGaps(points).map((point) => ({
-      ...point,
-      consumption: point.value,
-    }));
-  }, [filteredReadings]);
+
+    return buildCalendarMonths(trendReadings)
+      .filter((point) => isMonthInWindow(point.sortKey, currentWindow))
+      .map((point) => ({ ...point, consumption: point.value }));
+  }, [
+    readings,
+    meterBuildingIds,
+    matchesBuildingFilter,
+    statusFilter,
+    matchingBuildingIds,
+    currentWindow,
+  ]);
 
   const forecastModel = useMemo(
     () =>
@@ -909,10 +896,7 @@ const Analytics = () => {
   }
 
   // ── Headline figures ──
-  const totalConsumption = filteredReadings.reduce(
-    (sum, reading) => sum + reading.differential,
-    0
-  );
+  const totalConsumption = sumKwh(filteredReadings);
   const totalCost = totalConsumption * rate;
   const overallSpanDays = getReadingSpanDays(filteredReadings);
   const overallMonths =
@@ -1187,7 +1171,12 @@ const Analytics = () => {
       {/* ── Trend + Bar Charts ── */}
       <section className="grid gap-5 lg:grid-cols-2">
         <ChartCard
-          title="Energy Use Trend"
+          title={
+            <span className="inline-flex items-center gap-1.5">
+              Energy Use Trend
+              <InfoHint term="monthlyKwh" />
+            </span>
+          }
           subtitle="Monthly consumption based on saved meter readings."
           animDelay={240}
         >
@@ -1196,7 +1185,7 @@ const Analytics = () => {
               <EmptyState
                 icon={TrendingUp}
                 title="No trend data yet"
-                description="Monthly trends appear once meter readings are saved across two or more months."
+                description="A month appears once readings cover it from start to end."
                 className="h-full"
               />
             ) : (
