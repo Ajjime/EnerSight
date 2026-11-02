@@ -1,4 +1,7 @@
 import logging
+import os
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -62,11 +65,21 @@ def _add_missing_columns() -> None:
 
 _add_missing_columns()
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Load and warm up the OCR models in the background, so the first scan after a
+    # restart is not the slow one. OCR_PRELOAD=0 skips it (they load on first scan).
+    if os.getenv("OCR_PRELOAD", "1") != "0":
+        threading.Thread(target=ocr.warm_up, name="ocr-warm-up", daemon=True).start()
+    yield
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="EnerSight GIS API",
     description="Backend API for Building-Specific Energy Consumption Mapping and Optimization System using GIS",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware

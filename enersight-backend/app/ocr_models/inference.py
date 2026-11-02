@@ -26,6 +26,7 @@ import argparse
 import logging
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -39,6 +40,38 @@ from .dtrb.model import Model
 from .dtrb.utils import AttnLabelConverter, CTCLabelConverter
 
 logger = logging.getLogger(__name__)
+
+
+def run_at_full_speed() -> bool:
+    """
+    Opt this process out of Windows' efficiency mode ("power throttling"). Windows 11
+    runs processes it treats as background, such as a server in a minimized window,
+    on the slow cores at a low clock: a whole meter photo took about 30 s to scan
+    instead of 10, and the same convolution ran twice as fast once opted out. It
+    changes speed only, never results. Does nothing on other systems.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class _ThrottlingState(ctypes.Structure):
+        _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG),
+                    ("StateMask", wintypes.ULONG)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.SetProcessInformation.argtypes = [wintypes.HANDLE, ctypes.c_int,
+                                               ctypes.c_void_p, wintypes.DWORD]
+    kernel32.SetProcessInformation.restype = wintypes.BOOL
+    # ProcessPowerThrottling (4): execution speed is controlled, and never throttled.
+    state = _ThrottlingState(1, 0x1, 0x0)
+    ok = bool(kernel32.SetProcessInformation(
+        kernel32.GetCurrentProcess(), 4, ctypes.byref(state), ctypes.sizeof(state)))
+    if not ok:
+        logger.warning("Could not turn off Windows power throttling (error %s).",
+                       ctypes.get_last_error())
+    return ok
 
 # dtrb/modules/{prediction,transformation}.py pick their device the same way at
 # import time and allocate internal tensors on it. Deviating here (e.g. forcing

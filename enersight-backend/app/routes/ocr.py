@@ -43,6 +43,7 @@ from ..ocr_models.inference import VARIANTS as _DTRB_VARIANTS
 from ..ocr_models.inference import available_variants as _dtrb_available
 from ..ocr_models.inference import predict as _dtrb_predict
 from ..ocr_models.inference import weight_files as _dtrb_weight_files
+from ..ocr_models.inference import run_at_full_speed
 
 # Force-load .env from the backend root (works regardless of cwd). Keeps the
 # optional *_MODEL_PATH overrides read by ocr_models/inference.py available.
@@ -50,6 +51,9 @@ _env_path = Path(__file__).parent.parent.parent / ".env"
 load_dotenv(dotenv_path=_env_path, override=True)
 
 logger = logging.getLogger(__name__)
+
+# Scans run at full speed even when the server runs in a minimized window.
+run_at_full_speed()
 
 router = APIRouter(prefix="/ocr", tags=["OCR"])
 
@@ -466,6 +470,82 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
     return best["d"], best["c"], best["box"]
 
 
+# ── Whole photos: find the display first ─────────────────────────────────────
+# People scan the whole photo. On a whole phone photo EasyOCR's own scoring could
+# pick the wrong text: the campus Vision meter's barcode number (41326063) and a
+# neighbouring meter's serial at the photo's edge (78984) read more crisply than
+# the LCD. The reading itself was always the tallest digit text on the meter
+# (134-175 px on the campus photos, against 30-65 px for serials and labels). So a
+# quick pass at low resolution finds that tallest digit text, and the full pipeline
+# reads a loose area around it: the display plus some meter face, which is what
+# read the campus photos best when they were cropped by hand, and in a fraction of
+# the time the whole photo takes.
+_LOCATE_MIN_SIDE = 1600   # whole phone photos only; smaller uploads are read as they are
+_LOCATE_SIDE = 1024       # the quick pass runs at this size
+_LOCATE_DETECT_KW = dict(_DETECT_KW, canvas_size=1280, mag_ratio=1.0)
+# The loose area around the reading. At least five digit-heights wide: at low
+# resolution the detector can catch only part of the row (three digits of the
+# Vision's 11847), and a narrow area is then enlarged until the digits are too big
+# to read. Above and below, in multiples of the box's height.
+_DISPLAY_WIDTH_IN_BOXES = 2.0
+_DISPLAY_MIN_WIDTH_IN_HEIGHTS = 5.0
+_DISPLAY_PAD_TOP = 0.8
+_DISPLAY_PAD_BOTTOM = 1.3
+# Digit text shorter than this share of the photo's long side is a serial or a
+# label, not a display, so the whole photo is read instead.
+_LOCATE_MIN_HEIGHT = 0.035
+# A loose area covering most of the photo means it is already a close-up.
+_DISPLAY_MAX_SHARE = 0.5
+
+
+def _locate_reading(img: np.ndarray) -> tuple[int, int, int, int] | None:
+    """(x0, y0, x1, y1) of the tallest digit text in `img`, or None."""
+    scale = _LOCATE_SIDE / max(img.shape[:2])
+    small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    reader = _get_reader()
+    try:
+        horizontal, free = reader.detect(small, **_LOCATE_DETECT_KW)
+        horizontal, free = horizontal[0], free[0]
+        if not horizontal and not free:
+            return None
+        found = reader.recognize(small, horizontal, free, **_RECOGNIZE_KW)
+    except Exception as exc:
+        logger.warning("Display search failed: %s", exc)
+        return None
+
+    best = None
+    for bbox, text, _conf in found:
+        if not _valid(_clean(text)):
+            continue
+        xs = [p[0] for p in bbox]
+        ys = [p[1] for p in bbox]
+        height = max(ys) - min(ys)
+        if best is None or height > best[0]:
+            best = (height, (min(xs), min(ys), max(xs), max(ys)))
+    if best is None or best[0] < _LOCATE_MIN_HEIGHT * _LOCATE_SIDE:
+        return None
+    return tuple(int(round(v / scale)) for v in best[1])
+
+
+def _display_area(img: np.ndarray) -> np.ndarray:
+    """The part of a whole photo the reading is read from (see above)."""
+    h, w = img.shape[:2]
+    if max(h, w) < _LOCATE_MIN_SIDE:
+        return img
+    box = _locate_reading(img)
+    if box is None:
+        return img
+    x0, y0, x1, y1 = box
+    bw, bh = x1 - x0, y1 - y0
+    half = max(_DISPLAY_WIDTH_IN_BOXES * bw, _DISPLAY_MIN_WIDTH_IN_HEIGHTS * bh) / 2
+    centre = (x0 + x1) / 2
+    left, right = max(0, int(centre - half)), min(w, int(centre + half))
+    top, bottom = max(0, int(y0 - _DISPLAY_PAD_TOP * bh)), min(h, int(y1 + _DISPLAY_PAD_BOTTOM * bh))
+    if (right - left) * (bottom - top) > _DISPLAY_MAX_SHARE * w * h:
+        return img
+    return img[top:bottom, left:right]
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ENSEMBLE  (EasyOCR + the three capstone-trained DTRB models)
 # ═════════════════════════════════════════════════════════════════════════════
@@ -490,6 +570,11 @@ def _easyocr_read(img: np.ndarray) -> tuple[str, float]:
 # therefore also has to outnumber EasyOCR's side (EasyOCR plus any trained model
 # that read what it read), and can never be a shortened copy of EasyOCR's reading.
 # Even then the result is sent for review: see "overrode_easyocr" below.
+#
+# Since the fine-tuning they can also agree on the same mistake (two read the
+# campus Vision meter's 11847 as 718477, where EasyOCR's 1847 was wrong too). Raising
+# this to 3 was tried and is worse: two of them read the second Vision meter's 20959
+# right where EasyOCR read 24454, and 3 blocked that.
 _MIN_TRAINED_VOTES_TO_OVERRIDE = 2
 
 # Ranking weight among the trained models themselves (their benchmark char
@@ -507,6 +592,48 @@ def _is_truncation_of(candidate: str, reading: str) -> bool:
     """True when `candidate` is `reading` with digits missing from the start or end,
     the way the trained models fail ("0876" for "087654")."""
     return len(candidate) < len(reading) and candidate in reading
+
+
+def _edit_distance(a: str, b: str) -> int:
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        current = [i]
+        for j, cb in enumerate(b, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+        previous = current
+    return previous[-1]
+
+
+# When no trained model read EasyOCR's number at all. On every test photo where
+# that happened EasyOCR was wrong (the campus Vision meters: 184, 7847, 24454). If
+# all three trained models then nearly agree among themselves, each within one
+# digit of the reading closest to the other two, that reading replaces EasyOCR's
+# and goes to review like any override. On the second Vision meter EasyOCR read
+# 24454 and the trained models read 20959, 20954 and 209597: their consensus is the
+# right 20959.
+#
+# It may not be a shortened copy of EasyOCR's reading. With the round-1 weights it
+# was also kept to EasyOCR's length, because all three read the first Vision
+# meter's shadowed "1" as a "7" and agreed on 718477 for 11847. The round-2 weights
+# (trained on shadowed digits) agree on 11847 there instead, so the length rule now
+# only blocked right answers (EasyOCR's 0847 and 184 are short because it missed
+# digits).
+_CONSENSUS_MAX_DISTANCE = 1
+
+
+def _trained_consensus(scored: list[dict]) -> str | None:
+    trained = [v for v in scored if v["source"] != "easyocr"]
+    if len(trained) < len(_DTRB_VARIANTS):
+        return None
+    readings = [v["digits"] for v in trained]
+    best = min(
+        trained,
+        key=lambda v: (sum(_edit_distance(v["digits"], r) for r in readings),
+                       -v["instance_confidence"]),
+    )["digits"]
+    if all(_edit_distance(best, r) <= _CONSENSUS_MAX_DISTANCE for r in readings):
+        return best
+    return None
 
 
 def _run_ensemble(img: np.ndarray) -> dict:
@@ -618,6 +745,17 @@ def _run_ensemble(img: np.ndarray) -> dict:
         )
     else:
         winner, decision = easyocr_read, "easyocr led; no corroborated alternative"
+        backed = any(
+            int(v["digits"]) == int(easyocr_read) for v in scored if v["source"] != "easyocr"
+        )
+        consensus = None if backed else _trained_consensus(scored)
+        if consensus and not _is_truncation_of(consensus, easyocr_read):
+            winner = consensus
+            overrode_easyocr = True
+            decision = (
+                f"no trained model read easyocr's {easyocr_read}; the trained models "
+                f"agreed closely on {consensus}"
+            )
 
     members = groups[winner]
     for voter in members:
@@ -669,14 +807,13 @@ def _run_ensemble(img: np.ndarray) -> dict:
 def run_ocr(image_path: str) -> dict:
     raw = _load(image_path)
     img = _strip_watermark(raw)
-    img = _upscale(img, min_w=1400)
+    img = _upscale(_display_area(img), min_w=1400)
 
     # ── EasyOCR anchored by the trained models ────────────────────────────
-    # EasyOCR gets the whole upload: the upload page's crop step frames the
-    # display with a margin around it, and cropping tighter here would hurt. A
-    # tight crop of the campus Aclara display read 00653 as 8865, while a loose
-    # crop of the same photo read it right at higher confidence than the full
-    # photo. _run_ensemble hands the trained models their own tight crop.
+    # EasyOCR reads the display area with a loose margin around it: cropping
+    # tighter here would hurt. A tight crop of the campus Aclara display read
+    # 00653 as 8865, while a loose one read it right at higher confidence than
+    # the full photo. _run_ensemble hands the trained models their own tight crop.
     ensemble = _run_ensemble(img)
     if ensemble["candidate"] and _valid(ensemble["candidate"]):
         if ensemble["confidence"] >= MIN_USABLE_CONFIDENCE:
@@ -695,6 +832,25 @@ def run_ocr(image_path: str) -> dict:
         "raw_text": f"no reading found ({reason})",
         "ensemble_candidates": ensemble.get("ensemble_candidates", []),
     }
+
+
+def warm_up() -> None:
+    """
+    Load EasyOCR and the trained models and run them once on a made-up photo, so
+    the first real scan after the server starts is not the slow one: cold, a whole
+    campus photo took 53 s against 18 s warm. Runs in a background thread at
+    startup; a scan that arrives meanwhile waits for the OCR lock.
+    """
+    with _OCR_LOCK:
+        try:
+            photo = np.full((2048, 1536, 3), 205, np.uint8)
+            cv2.rectangle(photo, (380, 620), (1160, 900), (150, 175, 150), -1)
+            cv2.putText(photo, "12845", (430, 840), cv2.FONT_HERSHEY_SIMPLEX, 6,
+                        (35, 35, 35), 22)
+            _run_ensemble(_upscale(_display_area(photo), min_w=1400))
+            logger.info("OCR models loaded and warmed up.")
+        except Exception as exc:
+            logger.warning("OCR warm-up failed (the first scan will be slower): %s", exc)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -716,6 +872,23 @@ def _lcd_correct(digits: str) -> tuple[str, bool, str]:
         digits = "000" + digits[3:]
     changed = digits != orig
     return digits, changed, (f"LCD correction: {orig!r} → {digits!r}" if changed else "")
+
+
+def _uncorroborated(result: dict, reading: str) -> bool:
+    """
+    True when trained models gave a reading but none of them read this number.
+    On every test photo the wrong readings had no trained model behind them (the
+    campus Vision meters' 184, 7847, 24454) and every right one had at least one,
+    while EasyOCR's confidence on the wrong ones ran as high as 97%.
+    """
+    if not reading.isdigit():
+        return False
+    trained = [
+        c.get("digits") or "" for c in result.get("ensemble_candidates") or []
+        if c.get("source") != "easyocr"
+    ]
+    trained = [d for d in trained if _valid(d)]
+    return bool(trained) and not any(int(d) == int(reading) for d in trained)
 
 
 def _ambiguous(digits: str, conf: float) -> bool:
@@ -848,16 +1021,22 @@ def read_meter_photo(
         # Its confidence is the trained models' own, which runs high even when they
         # are wrong, so it says nothing about whether the override was right.
         overrode  = bool(result.get("overrode_easyocr"))
+        uncorroborated = _uncorroborated(result, raw_reading)
 
         reading_value = re.sub(r"[^0-9]", "", corrected)
 
-        needs_review = low_conf or ambiguous or changed or overrode
+        needs_review = low_conf or ambiguous or changed or overrode or uncorroborated
 
         reasons: list[str] = []
         if overrode:
             reasons.append(
                 f"The trained models outvoted EasyOCR, which read "
                 f"{result.get('easyocr_reading') or 'something else'}. "
+                "Check the photo before saving."
+            )
+        if uncorroborated:
+            reasons.append(
+                "None of the trained models read this number. "
                 "Check the photo before saving."
             )
         if changed:
@@ -893,6 +1072,7 @@ def read_meter_photo(
             "ensemble_candidates":     result.get("ensemble_candidates", []),
             "ensemble_decision":       result.get("ensemble_decision", ""),
             "overrode_easyocr":        overrode,
+            "uncorroborated":          uncorroborated,
             "review_reason":           " ".join(reasons),
             "minimum_reliable_confidence": MIN_RELIABLE_CONFIDENCE,
         }

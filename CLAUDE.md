@@ -58,12 +58,24 @@ LocationPickerModal and UploadOCR.
   `JUMP_FACTOR` (3×) the meter's usual kWh/day, or part of its serial number. The last
   two ask "save anyway?". This, not OCR confidence, is what catches misreads: the
   campus Vision meter read 11847 as 1847 at 76%.
+- **No review step (user's choice, Nov 2026):** `POST /readings/` saves every new
+  reading as verified; there is no "needs review" queue on Add Meter Reading. The
+  safety net is the warning before saving: the amber "Check the number" note when
+  the scan set `needs_review`, the plausibility notes, and the "save anyway?"
+  prompt. Keep those. `is_verified` is still never taken from the client, and an
+  Admin or Manager can send a reading back with `PUT /readings/{id}/review`. (An
+  OCR-proof variant, approving only readings OCR confirmed, was built and dropped
+  the same day: the user wanted no review UI at all.)
 - **Two consumption sources, never mixed:** measured = `reading_value − previous_reading`
   from meter readings; estimated = appliances, `watts × quantity × hours/day × days/month
   ÷ 1000`. Cost = kWh × one global rate (`settings` table `rate_per_kwh`, default ₱12;
   backend `get_rate_per_kwh`, frontend `useElectricityRate`).
 - **Periods:** `src/utils/periods.js` (This/Last Month, This Year, Custom Range and the
   comparison window), shared by Analytics and Reports.
+- **Meter rounds:** Add Meter Reading lists meters as "to read" or "done" for the chosen
+  calendar month (done = at least one reading dated in it), never-read meters first,
+  then longest unread. "Save and next meter" moves to the next one still to read.
+  Frontend only, from `/readings/`; logic in `src/utils/meterRounds.js` (tested).
 - **Forecast:** `buildForecastModel` in `src/utils/forecast.js` back-tests moving
   average, weighted moving average and simple exponential smoothing (α 0.3) on a 70/30
   split, ranks by MAPE and reports MAE/RMSE/MAPE/R². These three are Table 4 of the
@@ -82,14 +94,39 @@ LocationPickerModal and UploadOCR.
   EasyOCR's side (EasyOCR plus any trained model that agrees with it), and their reading
   is not a shortened copy of EasyOCR's. An override is always sent for review
   (`overrode_easyocr`). Don't switch to a weighted vote: one confident model once
-  turned a correct `087654` into `1209`.
+  turned a correct `087654` into `1209`. Don't raise the 2 to 3 either: tested, it
+  blocked two models reading the second Vision meter's `20959` right.
+- When no trained model read EasyOCR's number, and all three trained models are within
+  one digit of their consensus (`_trained_consensus`), the consensus wins, as a
+  reviewed override, unless it is a shortened copy of EasyOCR's reading. EasyOCR was
+  wrong every time it stood alone in testing; this turned `24454` into the right
+  `20959` and, with the round-2 weights, `0847` into `11847`. It was briefly limited
+  to EasyOCR's length because the round-1 weights agreed on `718477` for `11847`;
+  don't restore that with round-2 weights (it blocked right answers).
+- A reading no trained model agrees with (by value) goes to review
+  (`uncorroborated`). On every test photo that separated right from wrong; EasyOCR
+  was up to 97% confident on the wrong ones.
 - Below `MIN_USABLE_CONFIDENCE` (30%) the scan returns no reading; a lecture-slide
   photo used to come back as `4174337` at 4%.
-- The upload page crops before scanning (`react-image-crop`, `utils/imageCrop.js`). The
-  box should be loose: the display plus some meter face. A tight box around just the
-  digits read the campus Aclara `00653` as `8865`; a loose one read it right in 8–12 s
-  instead of 64 s for the full photo. Don't tune EasyOCR's preprocessing on the handful
-  of real photos; its results flip on small changes (`00653` ↔ `88653`).
+- The user scans the whole photo, always: no crop step on the upload page (they asked
+  twice; a crop step was removed Oct 30 2026). The page scans as soon as a photo is
+  picked and only scales photos over 2048 px down (`utils/photoResize.js`).
+- Whole photos (long side ≥ 1600 px) go through `_display_area` first: a quick pass at
+  1024 px finds the tallest digit text (the reading; serials and labels are much
+  shorter) and the pipeline reads a loose area around it. Without it EasyOCR picked a
+  barcode number or a neighbouring meter's serial, and a whole photo took 18 s warm
+  (53 s cold) instead of about 10. Capping the detector size instead was faster but
+  changed which text won. A tight area hurts: around just the digits the Aclara
+  `00653` read as `8865`. Don't tune EasyOCR's preprocessing on the handful of real
+  photos; its results flip on small changes (`00653` ↔ `88653`).
+- `warm_up()` loads and runs every model in a background thread at startup
+  (`OCR_PRELOAD=0` skips it), so the first scan after a restart is not the slow one.
+- `run_at_full_speed()` (inference.py, called by routes/ocr.py and train.py) opts the
+  process out of Windows 11 efficiency mode. A server in a minimized window was
+  throttled to the slow cores: 30-34 s per whole photo instead of about 10. It only
+  changes speed. Smaller detector sizes (display search at 768 px, main detection at
+  0.8x) were 20-30% faster but reshuffled the Vision meter's results, so they were
+  not adopted; ONNX Runtime was identical but only ~10% faster.
 - Each saved reading keeps `ocr_reading` (what OCR read, leading zeros kept) next to
   `reading_value` (what was saved). `export_ocr_dataset.py` exports photo + label pairs
   in the `eval_data/labels.csv` format, for evaluation or retraining. Eval labels must
@@ -112,9 +149,13 @@ LocationPickerModal and UploadOCR.
   - Each model's checkpoint is the best on the Roboflow validation split. Don't
     re-pick checkpoints by their campus scores: those flip between checkpoints and
     are the sets we report on.
-  - Still unsolved: the campus Vision `11847`. Every engine misreads it (`1847`,
-    `7847`, `71847`: the top shadow plus the first "1" looks like a "7"). The
-    plausibility checks are what catch it.
+  - Round 2 (Oct 30 2026) continued from round 1 with bezel shadows and Benford first
+    digits in `synth.py` plus one photo of the second Vision meter; round-1 weights
+    are kept as `finetuned_round1.pth`. Whole-pipeline test: 12 of 14 right (was 10).
+    The campus photos have guided every decision, so treat that as optimistic.
+  - Both Vision meters read right through the trained models (EasyOCR misreads them:
+    the top shadow over a "1" and glare). The first one (`11847`) still fails on some
+    crops (`184`, `71847`); review flags and plausibility checks catch those.
 - The backend loads `weights/<model>/finetuned.pth` when present, else the original
   `best_accuracy.pth`; `/ocr/health` → `dtrb_weight_files` says which. Training and the
   app share `inference.read_crop`, so evaluation scores what the system reads.

@@ -1,8 +1,8 @@
 """Turn exported campus readings into digit-row crops the models can train on.
 
-export_ocr_dataset.py writes the photos people uploaded (usually a crop of the whole
-display) with the value they confirmed. The models train on digit rows, so this
-runs the same step the live pipeline runs (EasyOCR's detector, then
+export_ocr_dataset.py writes the photos people uploaded (whole meter photos) with
+the value they confirmed. The models train on digit rows, so this runs the same
+steps the live pipeline runs (_display_area, EasyOCR's detector, then
 _dtrb_crop_around) and saves each row crop with its label.
 
 From enersight-backend/:
@@ -41,7 +41,7 @@ def main() -> int:
         if img is None:
             skipped += 1
             continue
-        work = O._upscale(O._strip_watermark(img), 1400)
+        work = O._upscale(O._display_area(O._strip_watermark(img)), 1400)
         _, _, box = O._easyocr_read(work)
         if box is None:
             skipped += 1            # nothing detected, so no row to train on

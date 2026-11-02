@@ -8,6 +8,9 @@ const ToastMessage = ({ message, type = "success", onClose }) => {
   }
 
   const isError = type === "error";
+  // Something to check, not a failure: an OCR reading that needs review used to
+  // arrive under "Something went wrong".
+  const isWarning = type === "warning";
 
   const toastContent = (
     <div className="pointer-events-none fixed right-6 top-6 z-[70000] w-[360px] max-w-[calc(100vw-3rem)] animate-fade-in">
@@ -21,20 +24,26 @@ const ToastMessage = ({ message, type = "success", onClose }) => {
         className={`pointer-events-auto flex items-start gap-3 rounded-2xl border px-4 py-3 shadow-xl ${
           isError
             ? "border-red-100 bg-red-50 text-red-800"
-            : "border-emerald-100 bg-emerald-50 text-emerald-800"
+            : isWarning
+              ? "border-amber-100 bg-amber-50 text-amber-800"
+              : "border-emerald-100 bg-emerald-50 text-emerald-800"
         }`}
       >
         <div
           className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
-            isError ? "bg-red-600 text-white" : "bg-emerald-700 text-white"
+            isError
+              ? "bg-red-600 text-white"
+              : isWarning
+                ? "bg-amber-500 text-white"
+                : "bg-emerald-700 text-white"
           }`}
         >
-          {isError ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
+          {isError || isWarning ? <AlertTriangle size={20} /> : <CheckCircle2 size={20} />}
         </div>
 
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold leading-tight">
-            {isError ? "Something went wrong" : "Success"}
+            {isError ? "Something went wrong" : isWarning ? "Please check" : "Success"}
           </p>
 
           <p className="mt-1 text-sm font-normal leading-5 opacity-85">

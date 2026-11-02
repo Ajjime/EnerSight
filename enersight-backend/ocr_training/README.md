@@ -27,7 +27,9 @@ of:
   and JPEG damage. The LCD frame and the meter face beyond it are drawn where the
   pipeline's widened crop shows them, often close to the digits: a first run without
   this read the Aclara's frame as a leading "1" and the Vision's top shadow plus its
-  first "1" as a "7";
+  first "1" as a "7". First digits follow Benford's law (30% are "1", as on real
+  meters), and a third of the renders have a soft shadow band on or just above the
+  digit tops;
 - **the original real crops**, built exactly as the notebook built them
   (`data.py`), with the same photo damage applied.
 
@@ -79,7 +81,7 @@ which writes [results.md](results.md).
 
 `heldout.py` defines them: digit rows hand-cropped from the four labelled photos in
 `eval_data/` (two are the campus meters), and in `heldout/production/` the ten
-crops the pipeline actually hands the models after a user crops a photo.
+crops the pipeline actually hands the models.
 
 Four meters is very little, and their failures were used to decide what the
 synthetic renderer draws (faint unlit segments, empty cells after the reading), so
@@ -87,6 +89,14 @@ those numbers are optimistic. The real test is readings from use: every reading
 saved through the upload page keeps its photo and the confirmed value, and
 `python export_ocr_dataset.py` exports them. Once a few hundred exist they should
 become both the test set and part of the training data.
+
+## Round 2 (Oct 30 2026)
+
+Continued from the round-1 weights (`--init .../finetuned.pth`) with the shadow band
+and Benford digits added to `synth.py`, plus the second campus Vision meter's photo
+(`20959`, crops cut by the live pipeline, repeated 10 times) as real training data.
+The first Vision meter (`11847`) and every held-out set stayed out of training, so
+they still test it fairly.
 
 ## Next round: training on real campus readings
 

@@ -171,7 +171,7 @@ const pageDescriptions = {
   buildings:
     "View and manage building details, type, floor area, and map coordinates.",
   meters: "View and manage meters connected to each building.",
-  ocr: "Upload and crop a meter photo — the reading is detected automatically.",
+  ocr: "Upload a meter photo — the reading is detected automatically.",
   reports: "Generate and view saved energy records and report summaries.",
   analytics: "Analyze trends, compare buildings, and review OCR quality.",
   users: "Add and manage people who can use the system.",

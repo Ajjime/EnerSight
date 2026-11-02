@@ -3,9 +3,9 @@
 campus_rows   digit rows hand-cropped from the four labelled photos in eval_data/
               (two of them the campus Aclara and Vision meters), each also cropped
               five more times with jittered margins.
-production    what the OCR pipeline actually hands the trained models after a user
-              crops a photo: the region EasyOCR's detector found, widened
-              (routes/ocr.py _dtrb_crop_around). Saved in heldout/production/.
+production    what the OCR pipeline actually hands the trained models: the region
+              EasyOCR's detector found, widened (routes/ocr.py _dtrb_crop_around).
+              Saved in heldout/production/.
 roboflow_test the original Roboflow test split, behind the figures in the paper.
               Not in the repo; pass the extracted export's test/ folder.
 

@@ -117,9 +117,9 @@ class ReadingCreate(BaseModel):
       Staff user attribute a reading to somebody else, and the frontend's fallback
       of `|| 1` silently credited readings to user 1 whenever localStorage was
       malformed. An audit trail you can forge is not an audit trail.
-    - `is_verified` is set only by PUT /readings/{id}/verify, which requires Admin
-      or Manager. As a plain input field it let a Staff user mark their own reading
-      verified at creation and walk straight around that restriction.
+    - `is_verified` is set by the server: every new reading is approved as it is
+      saved, and an Admin or Manager can send one back for review (or verify it
+      again) with PUT /readings/{id}/review and /verify. A client never sets it.
     """
 
     meter_id: int

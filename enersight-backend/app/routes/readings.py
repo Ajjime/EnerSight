@@ -137,6 +137,11 @@ def create_reading(
 
     # Attribution comes from the token, never from the request body.
     reading_data["user_id"] = current_user.user_id
+    # Every new reading is approved as it is saved (the user's choice, Nov 2026);
+    # the form warns before saving when OCR was unsure or the number looks wrong.
+    # Set here, never taken from the request. An Admin or Manager can still send a
+    # reading back with PUT /readings/{id}/review.
+    reading_data["is_verified"] = True
 
     new_reading = models.ConsumptionRecord(**reading_data)
 

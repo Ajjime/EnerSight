@@ -10,6 +10,7 @@ the pipeline's widened crop shows them, glare and blur.
 render() returns (grayscale uint8 image, label). The label is the digits that are
 lit, leading zeros included, exactly as a person reads the display.
 """
+import math
 import random
 
 import cv2
@@ -52,10 +53,18 @@ def _segment_polys(w, h, t, gap, hexagonal):
     }
 
 
+# Real meter readings' first digits follow Benford's law: about 30% start with 1.
+# Drawn uniformly, only 11% did, and both campus Vision meters' failures involve a
+# leading "1" (11847).
+_BENFORD = [math.log10(1 + 1 / d) for d in range(1, 10)]
+
+
 def _random_reading():
     """(reading, blank leading cells). Mostly 5-7 digits, like real meters."""
     n = random.choices([4, 5, 6, 7, 8], weights=[1, 5, 4, 3, 1])[0]
-    value = random.randint(0, 10 ** n - 1)
+    significant = max(1, n - random.choices([0, 1, 2, 3], weights=[12, 4, 3, 1])[0])
+    first = random.choices(range(1, 10), weights=_BENFORD)[0]
+    value = int(str(first) + "".join(random.choice("0123456789") for _ in range(significant - 1)))
     style = random.random()
     if style < 0.55:
         return str(value).zfill(n), 0           # leading zeros shown (Aclara 00653)
@@ -186,6 +195,18 @@ def render():
         face_val = random.choice([random.uniform(150, 245), random.uniform(45, 140)])
         img = img * (1 - face) + face_val * face
         img = img * (1 - frame) + random.uniform(15, 100) * frame
+
+    # A shadow from the bezel along the top, on or just above the digits. On the
+    # campus Vision meter it sits right above a thin "1", and every model read the
+    # pair as a "7": the band runs across all the cells, a 7's bar across one.
+    if random.random() < 0.35:
+        edge = pad_t + h * random.uniform(-0.03, 0.08)        # the band's lower edge
+        top = max(0, int(edge - h * random.uniform(0.15, 0.6)))
+        band = np.zeros((H, W), np.float32)
+        band[top:max(top + 1, int(edge)), :W if random.random() < 0.7 else int(W * random.uniform(0.5, 1))] = 1
+        band = cv2.GaussianBlur(band, (0, 0), max(0.5, h * random.uniform(0.02, 0.1)))
+        strength = random.uniform(0.4, 0.85)
+        img = img * (1 - strength * band) + random.uniform(10, 60) * strength * band
 
     if random.random() < 0.4:                   # glare
         cx, cy = random.uniform(0, W), random.uniform(0, H)

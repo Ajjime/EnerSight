@@ -1,20 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import ReactCrop from "react-image-crop";
 import {
   AlertTriangle,
-  Building2,
+  ArrowRight,
   Camera,
   CheckCircle2,
-  Crop,
   Eye,
   FileImage,
-  Gauge,
   ImagePlus,
-  Info,
   Loader2,
-  Maximize2,
-  RotateCcw,
-  Save,
   ScanLine,
   Search,
   Trash2,
@@ -26,6 +19,8 @@ import ConfirmationModal from "../components/ConfirmationModal";
 import HeaderActionButton from "../components/HeaderActionButton";
 import EmptyState from "../components/EmptyState";
 import SkeletonRows from "../components/SkeletonRows";
+import MeterRoundsList from "../components/MeterRoundsList";
+import MeterReadingHistory from "../components/MeterReadingHistory";
 import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import ToastMessage from "../components/ToastMessage";
 
@@ -33,12 +28,22 @@ import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 import { formatNumber } from "../utils/format";
 import { getOcrScore } from "../utils/readingQuality";
-import { FULL_CROP, cropImageToFile, isCropped } from "../utils/imageCrop";
+import { scalePhotoForUpload } from "../utils/photoResize";
 import {
   checkReadingPlausibility,
   getLatestReading,
   getUsualDailyUse,
 } from "../utils/readingPlausibility";
+import {
+  buildMeterRounds,
+  daysBetween,
+  getMeterHistory,
+  getNextMeterToRead,
+  getRecentMonths,
+} from "../utils/meterRounds";
+
+// How many months the reading-period picker offers, the current one first.
+const PERIOD_MONTHS = 6;
 const AUTO_REFRESH_MS = 30000;
 const PAGE_SIZE = 20;
 // A full-size phone photo takes up to a minute on a laptop CPU, and the backend
@@ -163,7 +168,7 @@ function getOcrStatusLabel({
 
   if (readingValue) {
     if (needsReview) {
-      return "Detected but needs review";
+      return "Check the number";
     }
 
     return "Detected successfully";
@@ -197,22 +202,68 @@ function getOcrStatusStyle({
   return "border-amber-100 bg-amber-50 text-amber-700";
 }
 
+const INPUT_CLASS =
+  "min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 text-sm font-normal text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-600";
+
+const SECONDARY_BUTTON_CLASS =
+  "inline-flex min-h-10 min-w-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60";
+
 function Field({ label, children, helper }) {
   return (
     <label className="block">
-      <span className="mb-2 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+      <span className="mb-1.5 block text-[13px] font-semibold text-slate-700">
         {label}
       </span>
 
       {children}
 
       {helper && (
-        <p className="mt-2 text-xs font-normal leading-5 text-slate-500">
+        <p className="mt-1.5 text-xs font-normal leading-5 text-slate-500">
           {helper}
         </p>
       )}
     </label>
   );
+}
+
+function SummaryCell({ label, value, caption, children }) {
+  return (
+    <div className="bg-white px-5 py-4">
+      <p className="text-[13px] font-medium text-slate-500">{label}</p>
+      <p className="mt-1.5 text-[22px] font-bold leading-tight text-slate-900">{value}</p>
+      {caption && <p className="mt-1 text-xs font-normal text-slate-500">{caption}</p>}
+      {children}
+    </div>
+  );
+}
+
+function CalcRow({ label, value }) {
+  return (
+    <div className="flex justify-between gap-3 border-t border-slate-100 px-3.5 py-2.5 first:border-t-0">
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="text-right font-semibold text-slate-900">{value}</dd>
+    </div>
+  );
+}
+
+function formatShortDate(value) {
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+}
+
+function formatDays(days) {
+  if (days <= 0) {
+    return "Same day";
+  }
+
+  return days === 1 ? "1 day" : `${days} days`;
 }
 
 
@@ -396,10 +447,6 @@ const UploadOCR = () => {
   const [form, setForm] = useState(emptyForm);
   const [selectedPhotoFile, setSelectedPhotoFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState("");
-  // The box the user draws around the meter display, as react-image-crop percents.
-  const [crop, setCrop] = useState(FULL_CROP);
-  // The previewed <img>, which the crop is cut from at its full resolution.
-  const photoRef = useRef(null);
   const [selectedFileName, setSelectedFileName] = useState("");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All Status");
@@ -432,6 +479,11 @@ const UploadOCR = () => {
   const [previousReadingValue, setPreviousReadingValue] = useState(0);
   const [isFirstReading, setIsFirstReading] = useState(false);
   const [isFetchingPrevious, setIsFetchingPrevious] = useState(false);
+  // Bumped after a save so the meter's "previous reading" is fetched again even
+  // when the same meter stays selected (no other meter left to read).
+  const [previousReloadKey, setPreviousReloadKey] = useState(0);
+  const months = useMemo(() => getRecentMonths(PERIOD_MONTHS), []);
+  const [periodKey, setPeriodKey] = useState(months[0].key);
 
   function showToast(message, type = "success") {
     setToast({ message, type });
@@ -521,14 +573,18 @@ const UploadOCR = () => {
       setBuildings(buildingData);
       setReadings(readingData);
 
+      // Start on the first meter still to read this month, so the page opens on
+      // the next job rather than on whichever meter happens to be first.
       setForm((current) => {
         if (current.meter_id || meterData.length === 0) {
           return current;
         }
 
+        const firstToRead = buildMeterRounds(meterData, readingData, months[0]).toRead[0];
+
         return {
           ...current,
-          meter_id: String(meterData[0].meter_id),
+          meter_id: String((firstToRead?.meter ?? meterData[0]).meter_id),
         };
       });
 
@@ -653,18 +709,54 @@ const UploadOCR = () => {
     return () => {
       cancelled = true;
     };
-  }, [form.meter_id]);
+  }, [form.meter_id, previousReloadKey]);
 
   const totalReadings = readings.length;
-  const verifiedReadings = readings.filter((reading) => reading.is_verified).length;
-  const pendingReadings = readings.filter((reading) => !reading.is_verified).length;
   const selectedMeter = getMeter(form.meter_id);
-  const selectedBuilding = selectedMeter
-    ? buildings.find(
-        (building) =>
-          Number(building.building_id) === Number(selectedMeter.building_id)
-      )
-    : null;
+
+  // This period's round: which meters still need a reading and which are done.
+  const period = months.find((month) => month.key === periodKey) || months[0];
+  const isCurrentPeriod = period.key === months[0].key;
+
+  const rounds = useMemo(
+    () => buildMeterRounds(meters, readings, period),
+    [meters, readings, period]
+  );
+
+  const nextMeterId = getNextMeterToRead(rounds.toRead, form.meter_id);
+  const nextMeter = nextMeterId ? getMeter(nextMeterId) : null;
+
+  const selectedRound = useMemo(
+    () =>
+      [...rounds.toRead, ...rounds.done].find(
+        (entry) => Number(entry.meter.meter_id) === Number(form.meter_id)
+      ) || null,
+    [rounds, form.meter_id]
+  );
+
+  const meterHistory = useMemo(
+    () => getMeterHistory(readings, form.meter_id, 5),
+    [readings, form.meter_id]
+  );
+
+  const meterReadPercent =
+    meters.length > 0 ? Math.round((rounds.done.length / meters.length) * 100) : 0;
+
+  // Readings dated inside the period, and the measured kWh they add up to
+  // (present minus previous on each, the same figure the other pages use).
+  const periodReadings = useMemo(
+    () =>
+      readings.filter((reading) => {
+        const time = new Date(reading.reading_date).getTime();
+        return time >= period.start && time < period.end;
+      }),
+    [readings, period]
+  );
+
+  const periodKwh = periodReadings.reduce(
+    (sum, reading) => sum + reading.differential,
+    0
+  );
 
   // The present reading checked against the meter's own history. Shown as the
   // value changes, so it catches an OCR misread and a typo the same way.
@@ -703,7 +795,73 @@ const UploadOCR = () => {
     ]
   );
 
+  // What the other engines read, offered as one-click choices when a reading needs
+  // review. On the second campus Vision meter EasyOCR read 24454 while TPS + CTC
+  // read the right 20959. Readings equal in value to the current one are left out.
+  const otherReadings = useMemo(() => {
+    const current = String(form.reading_value || "");
+    const byDigits = new Map();
+
+    for (const voter of ensembleCandidates) {
+      const digits = voter.valid ? String(voter.digits || "") : "";
+
+      if (!digits || (current && Number(digits) === Number(current))) {
+        continue;
+      }
+
+      const option = byDigits.get(digits) || { digits, labels: [] };
+      option.labels.push(voter.label || voter.source);
+      byDigits.set(digits, option);
+    }
+
+    return [...byDigits.values()].sort((a, b) => b.labels.length - a.labels.length);
+  }, [ensembleCandidates, form.reading_value]);
+
   const correctedFromOcr = isCorrectedFromOcr(form.ocr_reading, form.reading_value);
+
+  let presentReadingHelper = "Type the number on the display, or add a photo to read it.";
+
+  if (correctedFromOcr) {
+    presentReadingHelper = `OCR read ${form.ocr_reading}. Your correction is saved with the photo, which is what retraining the OCR needs.`;
+  } else if (form.ocr_reading) {
+    presentReadingHelper = "Filled in by OCR. Edit it if it does not match the photo.";
+  }
+
+  const consumptionKwh =
+    form.reading_value && form.meter_id
+      ? Math.max(Number(form.reading_value) - previousReadingValue, 0)
+      : null;
+
+  // Days since the meter's last reading, for the kWh-per-day line. A first
+  // reading's previous value was typed in with no date, so it has none.
+  const periodDays =
+    consumptionKwh !== null && !isFirstReading && latestMeterReading
+      ? daysBetween(latestMeterReading.reading_date, form.reading_date)
+      : null;
+
+  const draftHistoryRow =
+    consumptionKwh !== null
+      ? {
+          date: form.reading_date,
+          value: Number(form.reading_value),
+          used: consumptionKwh,
+          perDay: periodDays === null ? null : consumptionKwh / Math.max(periodDays, 1),
+          source: form.ocr_reading ? "OCR" : "Manual",
+        }
+      : null;
+
+  let selectedStatus = { text: "First reading", tone: "text-slate-700" };
+
+  if (selectedRound?.periodReading) {
+    selectedStatus = {
+      text: `Read ${formatShortDate(selectedRound.periodReading.reading_date)}`,
+      tone: "text-emerald-700",
+    };
+  } else if (selectedRound?.latest) {
+    selectedStatus = isCurrentPeriod
+      ? { text: `Due, ${formatDays(selectedRound.daysSinceLatest)}`, tone: "text-amber-800" }
+      : { text: `Not read in ${period.label}`, tone: "text-amber-800" };
+  }
 
   const ocrStatusLabel = getOcrStatusLabel({
     selectedPhotoFile,
@@ -726,6 +884,8 @@ const UploadOCR = () => {
     setNeedsReview(false);
     setReviewReason("");
     setOcrRawText("");
+    setEnsembleCandidates([]);
+    setEnsembleDecision("");
   }
 
   function resetSelectedPhoto() {
@@ -765,7 +925,6 @@ const UploadOCR = () => {
     setSelectedPhotoFile(file);
     setSelectedFileName(file.name);
     setPreviewUrl(newPreviewUrl);
-    setCrop(FULL_CROP);
 
     setForm((current) => ({
       ...current,
@@ -773,18 +932,20 @@ const UploadOCR = () => {
       reading_value: "",
       ocr_accuracy: 0,
       ocr_reading: "",
-      is_verified: false,
     }));
 
     event.target.value = "";
 
-    // No auto-scan: the user frames the display first. Scanning the moment a photo
-    // was picked sent the full photo, which took up to a minute and read worse
-    // than a crop of the display.
+    // Scan the whole photo as soon as it is picked.
+    if (form.meter_id) {
+      runEasyOcr(file);
+    } else {
+      showToast("Select a meter, then press Scan photo.", "error");
+    }
   }
 
-  async function runEasyOcr() {
-    const photoFile = selectedPhotoFile;
+  async function runEasyOcr(fileOverride) {
+    const photoFile = fileOverride || selectedPhotoFile;
 
     if (!form.meter_id) {
       showToast("Please select a meter before running OCR.", "error");
@@ -813,17 +974,13 @@ const UploadOCR = () => {
     clearOcrResult();
 
     try {
-      // The framed part of the photo, scaled down if it is a full-size photo. Falls
-      // back to the original file if the preview never loaded.
+      // The whole photo, scaled down first if it is larger than 2048 px.
       let uploadFile = photoFile;
-      const image = photoRef.current;
 
-      if (image?.naturalWidth) {
-        try {
-          uploadFile = await cropImageToFile(image, crop, photoFile.name);
-        } catch (cropError) {
-          console.error("Crop failed, sending the full photo:", cropError);
-        }
+      try {
+        uploadFile = await scalePhotoForUpload(photoFile);
+      } catch (resizeError) {
+        console.error("Could not scale the photo, sending the original:", resizeError);
       }
 
       const formData = new FormData();
@@ -871,11 +1028,10 @@ const UploadOCR = () => {
         // traced back to its evidence. Falls back to the local filename only for
         // display when the backend returned nothing.
         image_path: data.image_path || current.image_path || selectedFileName,
-        // No auto-verification. This used to set is_verified whenever confidence
-        // reached 97%, but the ensemble adds 5% per agreeing voter and caps at
-        // 99.5%, so three models agreeing on a wrong reading cleared the bar with
-        // nobody having looked at it. Verifying is now an explicit Admin/Manager
-        // action through PUT /readings/{id}/verify.
+        // Approval is not decided here. The server approves every new reading as
+        // it is saved; what this page owes the person is a clear warning before
+        // they save when OCR was unsure (needs_review) or the number looks wrong
+        // for the meter (plausibilityIssues).
         reading_date:
           current.reading_date ||
           toDateTimeLocalValue(new Date().toISOString()),
@@ -883,7 +1039,7 @@ const UploadOCR = () => {
 
       if (!data.success) {
         showToast(
-          data.message || "No meter number detected. Try a clearer crop.",
+          data.message || "No meter number detected. Try a clearer, closer photo.",
           "error"
         );
         return;
@@ -891,20 +1047,17 @@ const UploadOCR = () => {
 
       if (shouldReview) {
         showToast(
-          "OCR detected a reading, but manual review is required.",
-          "error"
+          "OCR was not sure about this number. Compare it with the photo before saving.",
+          "warning"
         );
       } else {
-        showToast(
-          "Meter reading detected successfully. Please review before saving.",
-          "success"
-        );
+        showToast("Meter reading detected.", "success");
       }
     } catch (error) {
       if (error.name === "AbortError") {
         // Aborted by the timeout, or by leaving the page (then nobody sees this).
         showToast(
-          "OCR took too long. Frame just the display with the crop box and try again, or enter the reading manually.",
+          "OCR took too long. Try again, or enter the reading manually.",
           "error"
         );
         return;
@@ -940,7 +1093,7 @@ const UploadOCR = () => {
         type: "saveUnusualReading",
         title: "Save an unusual reading?",
         message: warnings.map((issue) => issue.message).join(" "),
-        note: "Compare the number with the meter photo first. It is saved as pending review either way.",
+        note: "Compare the number with the meter photo first. Once saved, it counts in reports straight away.",
         confirmText: "Save Anyway",
         variant: "warning",
       });
@@ -965,15 +1118,22 @@ const UploadOCR = () => {
         return;
       }
 
-      showToast("Meter reading saved successfully.", "success");
+      showToast(
+        nextMeter
+          ? `Reading saved. Next: ${nextMeter.serial_no || `Meter #${nextMeterId}`}.`
+          : "Reading saved.",
+        "success"
+      );
 
+      // On to the next meter still to read; with none left, stay on this one.
       setForm({
         ...emptyForm,
         reading_date: getDefaultReadingDate(),
-        meter_id: meters[0]?.meter_id ? String(meters[0].meter_id) : "",
+        meter_id: nextMeterId ? String(nextMeterId) : form.meter_id,
       });
       setPreviousReadingValue(0);
       setIsFirstReading(false);
+      setPreviousReloadKey((key) => key + 1);
 
       resetSelectedPhoto();
       await refreshData(false);
@@ -986,6 +1146,32 @@ const UploadOCR = () => {
     } finally {
       setIsSaving(false);
     }
+  }
+
+  // Picking another meter keeps the photo and its reading, in case the photo was
+  // taken first and the wrong meter was selected.
+  function selectMeter(meterId) {
+    setForm((current) => ({ ...current, meter_id: String(meterId) }));
+  }
+
+  // Moves on without saving. The photo belonged to the meter being left, so it goes.
+  function skipToNextMeter() {
+    if (!nextMeterId) {
+      return;
+    }
+
+    resetSelectedPhoto();
+    setForm({
+      ...emptyForm,
+      reading_date: getDefaultReadingDate(),
+      meter_id: String(nextMeterId),
+    });
+  }
+
+  function scrollToAllReadings() {
+    document
+      .getElementById("all-readings")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function askDeleteReading(reading) {
@@ -1143,55 +1329,31 @@ const UploadOCR = () => {
       <PageHeader
         eyebrow="Smart Meter Scanner"
         title="Meter Reading OCR"
-        subtitle="Upload, verify, and save meter readings."
+        subtitle="Capture this period's readings meter by meter."
         icon={ScanLine}
-        status={isLoadingData ? "Syncing data" : `${totalReadings} Readings`}
+        status={isLoadingData ? "Syncing data" : null}
         lastUpdated={lastUpdated}
         isRefreshing={isAutoRefreshing || isLoadingData}
         intervalMs={AUTO_REFRESH_MS}
-        actions={null}
+        actions={
+          <label className="inline-flex items-center gap-2 text-[13px] font-medium text-slate-600">
+            Reading period
+            <select
+              value={period.key}
+              onChange={(event) => setPeriodKey(event.target.value)}
+              className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-900 outline-none transition focus:border-emerald-600"
+            >
+              {months.map((month) => (
+                <option key={month.key} value={month.key}>
+                  {month.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        }
       />
 
-      {/* ── Mobile Camera Section (mobile only) ── */}
-      {isMobileDevice && (
-        <section className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-700 to-emerald-800 p-5 shadow-sm">
-          <div className="mb-4 flex items-center gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-white/15 text-white">
-              <Camera size={20} />
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-white">Capture Meter</h2>
-              <p className="text-xs font-normal text-emerald-100">
-                Take a photo of the meter display directly.
-              </p>
-            </div>
-          </div>
-
-          <label className={`flex w-full cursor-pointer items-center justify-center gap-3 rounded-2xl bg-white py-4 text-sm font-semibold text-emerald-700 shadow-sm active:scale-[0.98] transition-transform duration-150 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
-            <Camera size={22} />
-            Open Camera
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              disabled={isRunningOcr}
-              onChange={handleFileChange}
-            />
-          </label>
-
-          {selectedPhotoFile && (
-            <div className="mt-3 flex items-center gap-2 rounded-2xl bg-white/15 px-4 py-2.5">
-              <CheckCircle2 size={16} className="text-lime-300" />
-              <p className="text-xs font-medium text-white">
-                Photo selected. Scroll down to frame the display and run OCR.
-              </p>
-            </div>
-          )}
-        </section>
-      )}
-
-      {meters.length === 0 && (
+      {meters.length === 0 && !isLoadingData && (
         <EmptyState
           variant="blocked"
           icon={AlertTriangle}
@@ -1200,119 +1362,182 @@ const UploadOCR = () => {
         />
       )}
 
-      <section className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-slate-500">Total Readings</p>
-              <p className="mt-2 text-3xl font-bold text-slate-950">
-                {totalReadings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-slate-950 text-lime-300">
-              <Gauge size={23} />
-            </div>
+      <section
+        aria-label="Summary"
+        className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-slate-200 bg-slate-200 lg:grid-cols-4"
+      >
+        <SummaryCell
+          label={isCurrentPeriod ? "Read this period" : `Read in ${period.label}`}
+          value={
+            <>
+              {rounds.done.length}{" "}
+              <span className="text-sm font-medium text-slate-500">
+                of {meters.length} meters
+              </span>
+            </>
+          }
+        >
+          <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-slate-200">
+            <div
+              className="h-full rounded-full bg-emerald-700 transition-all duration-500"
+              style={{ width: `${meterReadPercent}%` }}
+            />
           </div>
-
-          <p className="text-xs font-normal text-slate-400">
-            Stored consumption records
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-emerald-700">Verified</p>
-              <p className="mt-2 text-3xl font-bold text-emerald-800">
-                {verifiedReadings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-emerald-700 text-white">
-              <CheckCircle2 size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-emerald-700">
-            Ready for reports
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-amber-100 bg-amber-50 p-5 shadow-sm">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-amber-700">Needs Review</p>
-              <p className="mt-2 text-3xl font-bold text-amber-800">
-                {pendingReadings}
-              </p>
-            </div>
-
-            <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-500 text-white">
-              <AlertTriangle size={23} />
-            </div>
-          </div>
-
-          <p className="text-xs font-normal text-amber-700">
-            Pending manual check
-          </p>
-        </div>
+        </SummaryCell>
+        <SummaryCell
+          label="Readings saved"
+          value={periodReadings.length}
+          caption={isCurrentPeriod ? "This period" : period.label}
+        />
+        <SummaryCell
+          label="Used this period"
+          value={
+            <>
+              {formatNumber(periodKwh)}{" "}
+              <span className="text-sm font-medium text-slate-500">kWh</span>
+            </>
+          }
+          caption="Measured from meter readings"
+        />
+        <SummaryCell
+          label="Total readings"
+          value={totalReadings}
+          caption="All meters, all periods"
+        />
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[1.35fr_0.9fr]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-950">
-                Meter Photo Capture
-              </h2>
-              <p className="mt-1 text-sm font-normal text-slate-500">
-                Upload a meter photo, frame the display, then run OCR.
+      {/* The round's meters on the left, the selected meter's reading on the
+          right. Below lg the list becomes a dropdown at the top of the form. */}
+      <div className="flex overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <MeterRoundsList
+          className="hidden w-[300px] shrink-0 border-r border-slate-200 bg-slate-50/60 lg:flex"
+          toRead={rounds.toRead}
+          done={rounds.done}
+          selectedMeterId={form.meter_id}
+          onSelect={selectMeter}
+          getBuildingName={getBuildingName}
+          isCurrentPeriod={isCurrentPeriod}
+        />
+
+        <section aria-label="Selected meter" className="@container flex min-w-0 flex-1 flex-col">
+          <div className="border-b border-slate-200 px-5 py-4 lg:hidden">
+            <Field label="Meter">
+              <select
+                value={form.meter_id}
+                onChange={(event) => selectMeter(event.target.value)}
+                className={INPUT_CLASS}
+              >
+                {meters.length === 0 && <option value="">No meters yet</option>}
+                {rounds.toRead.length > 0 && (
+                  <optgroup label="To read">
+                    {rounds.toRead.map((entry) => (
+                      <option key={entry.meter.meter_id} value={entry.meter.meter_id}>
+                        {entry.meter.serial_no} • {getBuildingName(entry.meter.building_id)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {rounds.done.length > 0 && (
+                  <optgroup label="Done this period">
+                    {rounds.done.map((entry) => (
+                      <option key={entry.meter.meter_id} value={entry.meter.meter_id}>
+                        {entry.meter.serial_no} • {getBuildingName(entry.meter.building_id)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </Field>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 px-5 py-4 sm:px-6">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h2 className="text-lg font-bold text-slate-900">
+                  {selectedMeter?.serial_no || "No meter selected"}
+                </h2>
+                {selectedMeter && (
+                  <span className="rounded-full border border-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                    {selectedMeter.meter_type}
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-[13px] font-normal text-slate-500">
+                {selectedMeter
+                  ? getBuildingName(selectedMeter.building_id)
+                  : "Pick a meter to read."}
               </p>
             </div>
 
-            <div className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-300 ${ocrStatusStyle}`}>
-              {ocrStatusLabel}
-            </div>
+            {selectedMeter && (
+              <dl className="flex flex-wrap gap-x-7 gap-y-2">
+                <div>
+                  <dt className="text-xs font-normal text-slate-500">Last reading</dt>
+                  <dd className="mt-0.5 text-sm font-semibold text-slate-900">
+                    {latestMeterReading
+                      ? `${Number(latestMeterReading.reading_value).toLocaleString()} kWh`
+                      : "None yet"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-normal text-slate-500">Read on</dt>
+                  <dd className="mt-0.5 text-sm font-semibold text-slate-900">
+                    {latestMeterReading ? formatShortDate(latestMeterReading.reading_date) : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs font-normal text-slate-500">Status</dt>
+                  <dd className={`mt-0.5 text-sm font-semibold ${selectedStatus.tone}`}>
+                    {selectedStatus.text}
+                  </dd>
+                </div>
+              </dl>
+            )}
           </div>
 
-          <div className="grid gap-5 lg:grid-cols-[1fr_0.9fr]">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              {/* p-4: the crop handles sit half outside the photo's edge, and without
-                  room around it overflow-hidden clipped them on tall photos, so the
-                  corners could not be grabbed. */}
-              <div className="relative flex min-h-[320px] items-center justify-center overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-white p-4">
+          <div className="grid gap-6 p-5 sm:p-6 @2xl:grid-cols-2">
+            <figure className="flex min-w-0 flex-col gap-2.5">
+              <div
+                className={`relative flex min-h-[300px] flex-1 items-center justify-center overflow-hidden rounded-xl @2xl:min-h-[360px] ${
+                  previewUrl
+                    ? "bg-slate-900"
+                    : "border border-dashed border-slate-300 bg-slate-50"
+                }`}
+              >
                 {previewUrl ? (
-                  <ReactCrop
-                    crop={crop}
-                    onChange={(_pixelCrop, percentCrop) => setCrop(percentCrop)}
-                    keepSelection
-                    minWidth={40}
-                    minHeight={30}
-                    disabled={isRunningOcr}
-                    className="max-h-[340px]"
-                  >
-                    <img
-                      ref={photoRef}
-                      key={previewUrl}
-                      src={previewUrl}
-                      alt="Selected meter. Drag the box to frame the display."
-                      className="animate-image-in max-h-[340px] w-auto"
-                    />
-                  </ReactCrop>
+                  // Absolutely placed so the photo fills the height the form gives
+                  // it instead of setting it.
+                  <img
+                    key={previewUrl}
+                    src={previewUrl}
+                    alt="Selected meter"
+                    className="animate-image-in absolute inset-0 h-full w-full object-contain p-2"
+                  />
                 ) : (
-                  <div className="animate-fade-in p-8 text-center">
-                    <FileImage className="mx-auto text-slate-300" size={58} />
-                    <p className="mt-4 text-sm font-semibold text-slate-500">
-                      No meter photo selected
-                    </p>
-                    <p className="mt-1 text-xs font-normal text-slate-400">
-                      Upload or capture a clear meter image.
-                    </p>
-                  </div>
+                  <label
+                    className={`animate-fade-in flex h-full w-full cursor-pointer flex-col items-center justify-center p-8 text-center transition hover:bg-slate-100 ${
+                      isRunningOcr ? "pointer-events-none" : ""
+                    }`}
+                  >
+                    <span className="grid h-12 w-12 place-items-center rounded-xl bg-white text-slate-400 shadow-sm">
+                      <FileImage size={24} />
+                    </span>
+                    <span className="mt-3 text-sm font-semibold text-slate-700">
+                      Add a photo of the meter display
+                    </span>
+                    <span className="mt-1 text-xs font-normal text-slate-500">
+                      Click to choose one. The scan starts as soon as you do.
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={isRunningOcr}
+                      onChange={handleFileChange}
+                    />
+                  </label>
                 )}
 
-                {/* Scanning overlay while OCR runs */}
                 {isRunningOcr && previewUrl && (
                   <div className="pointer-events-none absolute inset-0 z-10 animate-fade-in overflow-hidden bg-emerald-950/10 backdrop-blur-[1px]">
                     <div className="animate-scan-line absolute left-0 h-1 w-full bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_18px_4px_rgba(16,185,129,0.7)]" />
@@ -1326,38 +1551,27 @@ const UploadOCR = () => {
                 )}
               </div>
 
-              {previewUrl && (
-                <div className="mt-3 flex items-start gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
-                  <Crop size={18} className="mt-0.5 shrink-0 text-emerald-700" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-emerald-900">
-                      Frame the meter display
-                    </p>
-                    <p className="mt-0.5 text-xs font-normal leading-5 text-emerald-800">
-                      Drag the corners so the box holds the whole display with a
-                      little of the meter around it. Leave out the serial number and
-                      barcode. A loose box reads better than a tight one, and scans
-                      much faster than the whole photo.
-                    </p>
-                    {isCropped(crop) && (
-                      <button
-                        type="button"
-                        onClick={() => setCrop(FULL_CROP)}
-                        disabled={isRunningOcr}
-                        className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
-                      >
-                        <Maximize2 size={13} />
-                        Use whole photo
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
+              <figcaption className="flex items-center justify-between gap-3 text-xs font-normal text-slate-500">
+                <span className="min-w-0 truncate" title={selectedFileName || undefined}>
+                  {selectedFileName || "No photo yet"}
+                </span>
+                <span
+                  className={`shrink-0 rounded-full border px-2.5 py-0.5 font-medium transition-colors duration-300 ${ocrStatusStyle}`}
+                >
+                  {ocrStatusLabel}
+                </span>
+              </figcaption>
 
-              <div className={`mt-4 grid gap-3 ${isMobileDevice ? "sm:grid-cols-2" : ""}`}>
-                <label className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
-                  <ImagePlus size={18} />
-                  Upload Photo
+              {/* Phones get a 2 x 2 grid (with Take photo); elsewhere two wide
+                  buttons and an icon-only Remove. */}
+              <div
+                className={`grid gap-2 ${
+                  isMobileDevice ? "grid-cols-2" : "grid-cols-[1fr_1fr_auto]"
+                }`}
+              >
+                <label className={`${SECONDARY_BUTTON_CLASS} cursor-pointer ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
+                  <ImagePlus size={16} />
+                  {selectedPhotoFile ? "Replace photo" : "Upload photo"}
                   <input
                     type="file"
                     accept="image/*"
@@ -1368,9 +1582,9 @@ const UploadOCR = () => {
                 </label>
 
                 {isMobileDevice && (
-                  <label className={`inline-flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
-                    <Camera size={18} />
-                    Take Photo
+                  <label className={`${SECONDARY_BUTTON_CLASS} cursor-pointer ${isRunningOcr ? "pointer-events-none opacity-60" : ""}`}>
+                    <Camera size={16} />
+                    Take photo
                     <input
                       type="file"
                       accept="image/*"
@@ -1381,144 +1595,144 @@ const UploadOCR = () => {
                     />
                   </label>
                 )}
-              </div>
 
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
                   // Not onClick={runEasyOcr}: React would pass the click event in
                   // as an argument.
                   onClick={() => runEasyOcr()}
                   disabled={isRunningOcr || !selectedPhotoFile}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className={SECONDARY_BUTTON_CLASS}
                 >
                   {isRunningOcr ? (
-                    <Loader2 size={18} className="animate-spin" />
+                    <Loader2 size={16} className="animate-spin" />
                   ) : (
-                    <ScanLine size={18} />
+                    <ScanLine size={16} />
                   )}
-                  {isRunningOcr ? "Reading..." : "Run OCR"}
+                  {isRunningOcr ? "Scanning..." : "Rescan"}
                 </button>
 
                 <button
                   type="button"
                   onClick={resetSelectedPhoto}
                   disabled={isRunningOcr || !selectedPhotoFile}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-label="Remove photo"
+                  title="Remove photo"
+                  className={`${SECONDARY_BUTTON_CLASS} ${isMobileDevice ? "" : "w-11"}`}
                 >
-                  <RotateCcw size={18} />
-                  Reset
+                  <Trash2 size={16} className="shrink-0" />
+                  {isMobileDevice && "Remove"}
                 </button>
               </div>
+            </figure>
 
-              {selectedFileName && (
-                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    Selected File
-                  </p>
-                  <p className="mt-1 break-words text-sm font-normal text-slate-700">
-                    {selectedFileName}
-                  </p>
-                </div>
+            <div className="flex min-w-0 flex-col gap-4">
+              {correctionApplied && (
+                <p className="animate-fade-up rounded-xl border border-blue-100 bg-blue-50 px-3.5 py-3 text-[13px] font-normal text-blue-800">
+                  <span className="font-semibold">Reading adjusted:</span> read as{" "}
+                  {rawReadingValue || "—"}, corrected to {correctedReadingValue}.
+                </p>
               )}
-            </div>
 
-            <div className="space-y-4">
-              <Field label="Assigned Meter">
-                <select
-                  value={form.meter_id}
-                  onChange={(event) =>
-                    setForm({ ...form, meter_id: event.target.value })
-                  }
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white"
+              {/* Why the reading was flagged. The backend has always sent this and
+                  it was never shown, so a user saw "needs review" with no reason. */}
+              {needsReview && reviewReason && (
+                <div
+                  role="status"
+                  className="animate-fade-up grid grid-cols-[18px_minmax(0,1fr)] gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3"
                 >
-                  <option value="">Select meter</option>
-                  {meters.map((meter) => (
-                    <option key={meter.meter_id} value={meter.meter_id}>
-                      {meter.serial_no} • {getBuildingName(meter.building_id)}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <Field
-                label={isFirstReading ? "Previous Reading (required)" : "Previous Reading (auto-filled)"}
-                helper={isFirstReading
-                  ? "No prior record found. Enter the meter's previous reading value."
-                  : "Taken from the last recorded reading for this meter."}
-              >
-                <input
-                  type="number"
-                  step="any"
-                  readOnly={!isFirstReading}
-                  value={isFetchingPrevious ? "" : previousReadingValue}
-                  onChange={isFirstReading
-                    ? (e) => setPreviousReadingValue(Number(e.target.value))
-                    : undefined}
-                  placeholder={isFetchingPrevious ? "Fetching..." : "0"}
-                  className={
-                    isFirstReading
-                      ? "w-full rounded-2xl border border-slate-300 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white"
-                      : "w-full cursor-not-allowed rounded-2xl border border-slate-200 bg-slate-100 px-5 py-3.5 text-sm font-normal text-slate-500 outline-none"
-                  }
-                />
-              </Field>
-
-              {form.reading_value && form.meter_id && (
-                <div className="animate-fade-up rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
-                    Consumption This Period
-                  </p>
-                  <p className="mt-2 text-2xl font-bold text-emerald-900">
-                    {Math.max(Number(form.reading_value) - previousReadingValue, 0).toLocaleString()} kWh
-                  </p>
-                  <p className="mt-1 text-xs font-normal text-emerald-600">
-                    Present ({Number(form.reading_value).toLocaleString()}) − Previous ({previousReadingValue.toLocaleString()})
-                  </p>
+                  <AlertTriangle size={18} className="mt-px text-amber-700" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-amber-900">Check the number</p>
+                    <p className="mt-0.5 text-[13px] font-normal leading-5 text-amber-800">
+                      {reviewReason}
+                    </p>
+                    {otherReadings.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                        {otherReadings.map((option) => (
+                          <button
+                            key={option.digits}
+                            type="button"
+                            onClick={() =>
+                              setForm((current) => ({
+                                ...current,
+                                reading_value: option.digits,
+                              }))
+                            }
+                            className="text-left text-[13px] font-semibold text-amber-900 transition hover:text-amber-950"
+                          >
+                            <span className="underline underline-offset-2">
+                              Use {option.digits} instead
+                            </span>{" "}
+                            <span className="font-normal text-amber-800">
+                              ({option.labels.join(", ")})
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
-
-              <Field
-                label="Present Reading"
-                helper={
-                  correctedFromOcr
-                    ? `OCR read ${form.ocr_reading}. Your correction is saved with the photo, which is what retraining the OCR needs.`
-                    : undefined
-                }
-              >
-                <input
-                  type="number"
-                  step="any"
-                  value={form.reading_value}
-                  onChange={(event) =>
-                    setForm({ ...form, reading_value: event.target.value })
-                  }
-                  placeholder="Example: 82353"
-                  aria-invalid={plausibilityIssues.length > 0}
-                  className={`w-full rounded-2xl border bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-emerald-600 focus:bg-white ${
-                    plausibilityIssues.length > 0 ? "border-amber-300" : "border-slate-200"
-                  }`}
-                />
-              </Field>
 
               {plausibilityIssues.length > 0 && (
                 <div
                   role="status"
-                  className="animate-fade-up rounded-2xl border border-amber-100 bg-amber-50 p-4"
+                  className="animate-fade-up grid grid-cols-[18px_minmax(0,1fr)] gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3"
                 >
-                  <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                    <AlertTriangle size={14} />
-                    Check this reading
-                  </p>
-                  <ul className="mt-2 space-y-1.5 text-sm font-normal leading-5 text-amber-800">
-                    {plausibilityIssues.map((issue) => (
-                      <li key={issue.code}>{issue.message}</li>
-                    ))}
-                  </ul>
+                  <AlertTriangle size={18} className="mt-px text-amber-700" />
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-amber-900">Check this reading</p>
+                    <ul className="mt-0.5 space-y-1 text-[13px] font-normal leading-5 text-amber-800">
+                      {plausibilityIssues.map((issue) => (
+                        <li key={issue.code}>{issue.message}</li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
               )}
 
-              <Field label="Reading Date">
+              {isFirstReading && (
+                <Field
+                  label="Previous reading (required)"
+                  helper="This meter has no saved readings yet. Enter the value it started from."
+                >
+                  <input
+                    type="number"
+                    step="any"
+                    value={isFetchingPrevious ? "" : previousReadingValue}
+                    onChange={(event) => setPreviousReadingValue(Number(event.target.value))}
+                    placeholder={isFetchingPrevious ? "Fetching..." : "0"}
+                    className={INPUT_CLASS}
+                  />
+                </Field>
+              )}
+
+              <Field label="Present reading" helper={presentReadingHelper}>
+                <span
+                  className={`flex overflow-hidden rounded-xl border bg-white transition focus-within:border-emerald-600 ${
+                    plausibilityIssues.length > 0 ? "border-amber-300" : "border-slate-300"
+                  }`}
+                >
+                  <input
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    value={form.reading_value}
+                    onChange={(event) =>
+                      setForm({ ...form, reading_value: event.target.value })
+                    }
+                    placeholder="—"
+                    aria-invalid={plausibilityIssues.length > 0}
+                    className="min-h-[52px] min-w-0 flex-1 bg-transparent px-3.5 text-2xl font-bold tabular-nums text-slate-900 outline-none placeholder:text-slate-300"
+                  />
+                  <span className="flex items-center border-l border-slate-200 bg-slate-50 px-3.5 text-[13px] font-semibold text-slate-600">
+                    kWh
+                  </span>
+                </span>
+              </Field>
+
+              <Field label="Reading date and time">
                 <input
                   type="datetime-local"
                   value={form.reading_date}
@@ -1526,171 +1740,64 @@ const UploadOCR = () => {
                     const val = event.target.value;
                     setForm((prev) => ({ ...prev, reading_date: val }));
                   }}
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-3.5 text-sm font-normal text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white"
+                  className={INPUT_CLASS}
                 />
               </Field>
 
-              {/* The "mark as manually verified" checkbox used to live here. It
-                  walked straight around the rule that verification requires an
-                  Admin or Manager, because a Staff user could tick it on their own
-                  reading. Verification now happens from the readings table below,
-                  which calls the dedicated endpoint. */}
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4">
-                <p className="text-sm font-semibold text-slate-700">
-                  Saved as pending review
-                </p>
-                <p className="mt-1 text-sm font-normal text-slate-500">
-                  An Admin or Manager verifies readings from the table below.
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                <p className="text-sm font-semibold text-emerald-800">
-                  Selected Meter Context
-                </p>
-                <p className="mt-1 text-sm font-normal text-emerald-700">
-                  {selectedMeter
-                    ? `${selectedMeter.serial_no} • ${
-                        selectedBuilding?.name || "Unknown building"
-                      }`
-                    : "No meter selected"}
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => saveReading()}
-                disabled={isSaving || meters.length === 0}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSaving ? (
-                  <Loader2 size={18} className="animate-spin" />
-                ) : (
-                  <Save size={18} />
+              <dl className="overflow-hidden rounded-xl border border-slate-200 text-[13px] tabular-nums">
+                <CalcRow
+                  label="Previous reading"
+                  value={
+                    isFetchingPrevious
+                      ? "..."
+                      : `${Number(previousReadingValue).toLocaleString()} kWh`
+                  }
+                />
+                <CalcRow
+                  label="Present reading"
+                  value={
+                    form.reading_value
+                      ? `${Number(form.reading_value).toLocaleString()} kWh`
+                      : "—"
+                  }
+                />
+                {periodDays !== null && (
+                  <CalcRow
+                    label="Period"
+                    value={`${formatDays(periodDays)} · ${(
+                      consumptionKwh / Math.max(periodDays, 1)
+                    ).toFixed(1)} kWh/day`}
+                  />
                 )}
-                {isSaving ? "Saving..." : "Save Reading"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-5">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-3">
-              <div className="grid h-11 w-11 place-items-center rounded-2xl bg-emerald-700 text-white">
-                <Info size={21} />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-slate-950">
-                  OCR Result
-                </h2>
-                <p className="mt-1 text-sm font-normal text-slate-400">
-                  Review before saving.
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                  Detected Reading
-                </p>
-                <p
-                  key={form.reading_value || "empty"}
-                  className={`mt-2 text-3xl font-bold text-slate-950 ${form.reading_value ? "animate-pop" : ""}`}
-                >
-                  {form.reading_value || "—"}
-                </p>
-              </div>
-
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                  Scan Status
-                </p>
-                <span className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-medium transition-colors duration-300 ${ocrStatusStyle}`}>
-                  {ocrStatusLabel}
-                </span>
-              </div>
-
-              <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                  Previous Reading
-                </p>
-                <p className="mt-2 text-xl font-semibold text-slate-700">
-                  {isFetchingPrevious ? "—" : previousReadingValue.toLocaleString()} kWh
-                </p>
-                <p className="mt-1 text-xs font-normal text-slate-400">
-                  {isFirstReading ? "No prior record — initial reading" : "Last recorded reading"}
-                </p>
-              </div>
-
-              <div className={`rounded-2xl border p-4 ${form.reading_value && form.meter_id ? "border-emerald-100 bg-emerald-50" : "border-slate-100 bg-slate-50"}`}>
-                <p className={`text-xs font-semibold uppercase tracking-[0.16em] ${form.reading_value && form.meter_id ? "text-emerald-700" : "text-slate-400"}`}>
-                  Consumption This Period
-                </p>
-                <p className={`mt-2 text-2xl font-bold ${form.reading_value && form.meter_id ? "text-emerald-900" : "text-slate-400"}`}>
-                  {form.reading_value && form.meter_id
-                    ? `${Math.max(Number(form.reading_value) - previousReadingValue, 0).toLocaleString()} kWh`
-                    : "— kWh"}
-                </p>
-              </div>
-
-              {selectedMeter && (
-                <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                    Assigned Meter
-                  </p>
-                  <p className="mt-2 text-sm font-semibold text-slate-950">
-                    {selectedMeter.serial_no}
-                  </p>
-                  <p className="mt-1 text-xs font-normal text-slate-500">
-                    {selectedBuilding?.name || "Unknown building"}
-                  </p>
+                <div className="flex items-baseline justify-between gap-3 border-t border-slate-200 bg-slate-50 px-3.5 py-3">
+                  <dt className="font-semibold text-slate-900">Consumption</dt>
+                  <dd
+                    className={`text-lg font-bold ${
+                      consumptionKwh === null ? "text-slate-300" : "text-emerald-700"
+                    }`}
+                  >
+                    {consumptionKwh === null ? "—" : `${consumptionKwh.toLocaleString()} kWh`}
+                  </dd>
                 </div>
-              )}
-
-              {correctionApplied && (
-                <div className="animate-fade-up rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">
-                    Reading Adjusted
-                  </p>
-                  <p className="mt-2 text-sm font-normal text-blue-800">
-                    Read as {rawReadingValue || "—"}, corrected to{" "}
-                    {correctedReadingValue}
-                  </p>
-                </div>
-              )}
-
-              {/* Why the reading was flagged. The backend has always sent this and
-                  it was never shown, so a user saw "needs review" with no reason. */}
-              {needsReview && reviewReason && (
-                <div className="animate-fade-up rounded-2xl border border-amber-100 bg-amber-50 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">
-                    Why this needs review
-                  </p>
-                  <p className="mt-2 text-sm font-normal leading-5 text-amber-800">
-                    {reviewReason}
-                  </p>
-                </div>
-              )}
+              </dl>
 
               {/* The ensemble's working. This is the part of the system worth
                   showing: four engines read the photo independently and the answer
                   is reconciled between them. It was computed and then discarded. */}
               {ensembleCandidates.length > 0 && (
-                <details className="animate-fade-up rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                <details className="animate-fade-up rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+                  <summary className="cursor-pointer text-[13px] font-semibold text-slate-700">
                     How the engines read it ({ensembleCandidates.length})
                   </summary>
 
-                  <div className="mt-3 space-y-2">
+                  <div className="mt-3 space-y-1.5">
                     {ensembleCandidates.map((voter) => (
                       <div
                         key={voter.source}
                         className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 text-xs ${
                           voter.chosen
                             ? "border-emerald-200 bg-emerald-50"
-                            : "border-slate-200 bg-white"
+                            : "border-slate-200 bg-slate-50"
                         }`}
                       >
                         <span className="min-w-0 truncate font-medium text-slate-600">
@@ -1698,10 +1805,10 @@ const UploadOCR = () => {
                         </span>
 
                         <span className="flex shrink-0 items-center gap-2">
-                          <span className="font-semibold text-slate-950">
+                          <span className="font-semibold text-slate-900">
                             {voter.digits || "—"}
                           </span>
-                          <span className="text-slate-400">
+                          <span className="text-slate-500">
                             {Math.round((voter.instance_confidence || 0) * 100)}%
                           </span>
                           {voter.chosen && (
@@ -1721,7 +1828,7 @@ const UploadOCR = () => {
                   )}
 
                   {ocrRawText && (
-                    <p className="mt-2 break-words text-[11px] font-normal leading-5 text-slate-400">
+                    <p className="mt-2 break-words text-[11px] font-normal leading-5 text-slate-500">
                       Raw: {ocrRawText}
                     </p>
                   )}
@@ -1730,10 +1837,53 @@ const UploadOCR = () => {
             </div>
           </div>
 
-        </div>
-      </section>
+          {/* Readings are approved by the server as they are saved, so there is
+              no review step here; the amber notes above are the check. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3.5 sm:px-6">
+            <p className="flex items-center gap-1.5 text-xs font-normal text-slate-500">
+              <CheckCircle2 size={14} className="shrink-0 text-emerald-600" />
+              Readings are approved as soon as you save them.
+            </p>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap gap-2.5">
+              {nextMeterId && (
+                <button
+                  type="button"
+                  onClick={skipToNextMeter}
+                  disabled={isRunningOcr || isSaving}
+                  className="min-h-11 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Skip meter
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => saveReading()}
+                disabled={isSaving || meters.length === 0}
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSaving && <Loader2 size={16} className="animate-spin" />}
+                {isSaving ? "Saving..." : nextMeterId ? "Save and next meter" : "Save reading"}
+                {!isSaving && nextMeterId && <ArrowRight size={16} />}
+              </button>
+            </div>
+          </div>
+
+          {selectedMeter && (
+            <MeterReadingHistory
+              rows={meterHistory}
+              draft={draftHistoryRow}
+              onViewAll={scrollToAllReadings}
+            />
+          )}
+        </section>
+      </div>
+
+      <section
+        id="all-readings"
+        className="scroll-mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+      >
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
             <h2 className="text-xl font-semibold text-slate-950">
@@ -2026,7 +2176,7 @@ function buildReadingPayload(form, previousReading = 0) {
     // photo records a misread, which is what the trained models need to learn from.
     ocr_reading: /^[0-9]+$/.test(form.ocr_reading || "") ? form.ocr_reading : null,
     // user_id and is_verified are deliberately not sent. The backend takes the
-    // author from the token, and verification is a separate Admin/Manager action.
+    // author from the token and approves every new reading itself.
   };
 }
 

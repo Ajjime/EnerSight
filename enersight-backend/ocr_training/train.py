@@ -38,6 +38,7 @@ def keep_awake():
         import ctypes
         ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    I.run_at_full_speed()   # and off Windows' efficiency mode, which halves speed
 
 
 def evaluate(loaded, sets) -> dict:
