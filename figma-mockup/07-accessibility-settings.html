@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=1440">
+<title>07 Accessibility Settings · EnerSight Mock-up</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .set { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--border); }
+  .set:last-child { border-bottom: 0; }
+  .set .t { font-weight: 600; } .set .d { font-size: .85rem; color: var(--muted); grid-column: 1; }
+  .set > :last-child { grid-row: 1 / span 2; grid-column: 2; }
+  .switch { width: 60px; height: 34px; border-radius: 999px; border: 2px solid var(--muted); background: var(--nodata-bg); position: relative; cursor: pointer; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 999px; background: #fff; border: 2px solid var(--muted); }
+  .switch[aria-checked="true"] { background: var(--brand); border-color: var(--brand); }
+  .switch[aria-checked="true"]::after { left: 29px; border-color: var(--brand); }
+  .switch .st { position: absolute; left: 70px; top: 5px; font-size: .8rem; font-weight: 700; color: var(--muted); }
+  .sizes { display: flex; gap: 8px; }
+  .sizes button { width: 64px; height: 56px; border-radius: 12px; border: 2px solid var(--border); background: var(--card); color: var(--text); font-weight: 700; font-family: inherit; }
+  .sizes button[aria-checked="true"] { border-color: var(--brand); background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--brand); }
+  .preview { border: 2px dashed var(--border); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .keys { width: 100%; font-size: .88rem; }
+  .keys td { padding: 8px 6px; }
+  kbd { border: 1px solid var(--border); border-bottom-width: 3px; border-radius: 6px; padding: 2px 8px; font-weight: 700; font-family: inherit; background: var(--bg); }
+</style>
+</head>
+<body data-page="Settings">
+<div class="frame">
+  <a class="skip-link hidden" href="#main">Skip to main content</a>
+  <div id="sidebar"></div>
+  <div class="main">
+    <div id="topbar"></div>
+    <main class="content" id="main">
+      <div class="page-head">
+        <div><h1>Accessibility settings</h1><p class="subtitle">Make EnerSight easier to see, hear, read and use. Saved to your account and applied on every device.</p></div>
+        <button class="btn">Reset to default</button>
+      </div>
+
+      <div class="grid" style="grid-template-columns: 1fr 1fr 380px; align-items:start">
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <section class="card" aria-labelledby="see-h">
+            <div style="display:flex;gap:10px;align-items:center"><h2 id="see-h">👁 Seeing</h2><span class="pin" aria-hidden="true">1</span></div>
+            <div class="set"><span class="t" id="ts">Text size</span><span class="d">Makes all text and buttons bigger.</span>
+              <div class="sizes" role="radiogroup" aria-labelledby="ts"><button role="radio" aria-checked="false" style="font-size:14px">A</button><button role="radio" aria-checked="true" style="font-size:18px">A+</button><button role="radio" aria-checked="false" style="font-size:22px">A++</button></div></div>
+            <div class="set"><span class="t">High contrast</span><span class="d">Black background, white text, yellow highlights.</span><button class="switch" role="switch" aria-checked="false" aria-label="High contrast"><span class="st">OFF</span></button></div>
+            <div class="set"><span class="t">Dark mode</span><span class="d">Easier on the eyes at night.</span><button class="switch" role="switch" aria-checked="false" aria-label="Dark mode"><span class="st">OFF</span></button></div>
+            <div class="set"><span class="t">Colour-blind friendly palette</span><span class="d">Uses blue / orange instead of green / red.</span><button class="switch" role="switch" aria-checked="true" aria-label="Colour-blind friendly palette"><span class="st">ON</span></button></div>
+            <div class="set"><span class="t">Underline all links</span><span class="d">Links stand out without relying on colour.</span><button class="switch" role="switch" aria-checked="true" aria-label="Underline all links"><span class="st">ON</span></button></div>
+          </section>
+
+          <section class="card" aria-labelledby="hear-h">
+            <div style="display:flex;gap:10px;align-items:center"><h2 id="hear-h">👂 Hearing &amp; listening</h2><span class="pin" aria-hidden="true">2</span></div>
+            <div class="set"><span class="t">Read aloud (text-to-speech)</span><span class="d">Reads the selected text or the whole page.</span><button class="switch" role="switch" aria-checked="true" aria-label="Read aloud"><span class="st">ON</span></button></div>
+            <div class="set"><span class="t">Reading speed</span><span class="d">How fast the voice reads.</span><select aria-label="Reading speed" style="min-width:140px"><option>Normal (1×)</option></select></div>
+            <div class="set"><span class="t">Visual alerts</span><span class="d">Flash the screen border and show a banner instead of only a sound.</span><button class="switch" role="switch" aria-checked="true" aria-label="Visual alerts"><span class="st">ON</span></button></div>
+          </section>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <section class="card" aria-labelledby="move-h">
+            <div style="display:flex;gap:10px;align-items:center"><h2 id="move-h">✋ Moving &amp; typing</h2><span class="pin" aria-hidden="true">3</span></div>
+            <div class="set"><span class="t">Reduce motion</span><span class="d">Turns off animations and sliding panels.</span><button class="switch" role="switch" aria-checked="true" aria-label="Reduce motion"><span class="st">ON</span></button></div>
+            <div class="set"><span class="t">Extra-large click targets</span><span class="d">Buttons at least 56 px, more space between them.</span><button class="switch" role="switch" aria-checked="false" aria-label="Extra-large click targets"><span class="st">OFF</span></button></div>
+            <div class="set"><span class="t">Voice input for readings</span><span class="d">Say the meter number instead of typing it.</span><button class="switch" role="switch" aria-checked="true" aria-label="Voice input"><span class="st">ON</span></button></div>
+            <div class="set"><span class="t">More time before sign-out</span><span class="d">Warns you 2 minutes before, with a one-click "I need more time".</span><select aria-label="Session time" style="min-width:140px"><option>60 minutes</option></select></div>
+          </section>
+
+          <section class="card" aria-labelledby="read-h">
+            <div style="display:flex;gap:10px;align-items:center"><h2 id="read-h">🧠 Reading &amp; understanding</h2><span class="pin" aria-hidden="true">4</span></div>
+            <div class="set"><span class="t">Language</span><span class="d">Interface language.</span><select aria-label="Language" style="min-width:140px"><option>English</option><option>Cebuano (Bisaya)</option></select></div>
+            <div class="set"><span class="t">Simple explanations</span><span class="d">Show "What does this mean?" under every number.</span><button class="switch" role="switch" aria-checked="true" aria-label="Simple explanations"><span class="st">ON</span></button></div>
+            <div class="set"><span class="t">Dyslexia-friendly font</span><span class="d">Wider letters and line spacing.</span><button class="switch" role="switch" aria-checked="false" aria-label="Dyslexia-friendly font"><span class="st">OFF</span></button></div>
+          </section>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:20px">
+          <section class="card" aria-labelledby="pv-h">
+            <h2 id="pv-h" style="margin-bottom:12px">Live preview</h2>
+            <div class="preview" aria-live="polite">
+              <span class="badge" style="align-self:flex-start;color:#9a3412;background:#ffedd5"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span>
+              <b style="font-size:1.15rem">Science Laboratory Building</b>
+              <span style="font-size:1.15rem">284 kWh/m²/yr</span>
+              <span class="small muted">Uses almost twice the normal energy for its size.</span>
+              <a href="#" style="color:#1d4ed8;font-weight:600;text-decoration:underline">Open profile</a>
+            </div>
+            <p class="small muted" style="margin:10px 0 0">Colour-blind palette on: Critical shows in orange, Normal in blue.</p>
+          </section>
+
+          <section class="card" aria-labelledby="k-h">
+            <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px"><h2 id="k-h">⌨ Keyboard shortcuts</h2><span class="pin" aria-hidden="true">5</span></div>
+            <table class="keys">
+              <tbody>
+                <tr><td><kbd>Alt</kbd> + <kbd>D</kbd></td><td>Dashboard</td></tr>
+                <tr><td><kbd>Alt</kbd> + <kbd>M</kbd></td><td>GIS Map</td></tr>
+                <tr><td><kbd>Alt</kbd> + <kbd>N</kbd></td><td>Add meter reading</td></tr>
+                <tr><td><kbd>Alt</kbd> + <kbd>R</kbd></td><td>Reports</td></tr>
+                <tr><td><kbd>Alt</kbd> + <kbd>+</kbd> / <kbd>−</kbd></td><td>Text size</td></tr>
+                <tr><td><kbd>?</kbd></td><td>Show all shortcuts</td></tr>
+              </tbody>
+            </table>
+          </section>
+          <button class="btn btn-primary btn-lg" style="justify-content:center">Save settings</button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<section class="notes" aria-label="Accessibility notes">
+  <h2>Accessibility notes — Accessibility Settings</h2>
+  <ol>
+    <li><span class="pin">1</span><span><b>Seeing (low vision, colour blindness):</b> text size, high contrast, dark mode, a blue/orange colour-blind palette, and underlined links.</span></li>
+    <li><span class="pin">2</span><span><b>Hearing &amp; listening:</b> text-to-speech for users with low vision or reading difficulty, and visual alerts for Deaf or hard-of-hearing users.</span></li>
+    <li><span class="pin">3</span><span><b>Moving &amp; typing (motor disabilities):</b> reduced motion, bigger targets, voice input for meter readings, and a longer session timeout with a warning (WCAG 2.2.1 Timing Adjustable).</span></li>
+    <li><span class="pin">4</span><span><b>Reading &amp; understanding (cognitive, language):</b> English/Cebuano, simple explanations, and a dyslexia-friendly font. Switches show ON/OFF in words, not only by colour or position.</span></li>
+    <li><span class="pin">5</span><span><b>Keyboard shortcuts</b> are listed on screen and can be opened anytime with "?". The live preview shows how each setting will look before saving.</span></li>
+  </ol>
+</section>
+<script src="app.js"></script>
+</body>
+</html>

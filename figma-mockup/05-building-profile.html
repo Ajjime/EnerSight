@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=1440">
+<title>05 Building Profile · EnerSight Mock-up</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+  .facts { display: flex; gap: 28px; margin-top: 12px; font-size: .92rem; }
+  .facts b { display: block; font-size: 1.1rem; }
+  .meter { position: relative; height: 22px; border-radius: 999px; background: linear-gradient(90deg, #d1fae5 0 50%, #fef3c7 50% 83%, #fee2e2 83%); border: 1px solid var(--border); }
+  .meter .tick { position: absolute; top: -6px; bottom: -6px; width: 2px; background: var(--text); }
+  .meter .you { position: absolute; top: -12px; width: 6px; height: 46px; border-radius: 4px; background: var(--critical); left: calc(94.6% - 3px); }
+  .meter-labels { display: flex; justify-content: space-between; font-size: .8rem; color: var(--muted); margin-top: 10px; position: relative; height: 18px; }
+  .meter-labels span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  details { border: 1px solid var(--border); border-radius: 12px; padding: 0 16px; }
+  summary { min-height: 48px; display: flex; align-items: center; font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body data-page="Buildings">
+<div class="frame">
+  <a class="skip-link hidden" href="#main">Skip to main content</a>
+  <div id="sidebar"></div>
+  <div class="main">
+    <div id="topbar"></div>
+    <main class="content" id="main">
+      <nav aria-label="Breadcrumb" class="small"><a href="#" style="color:var(--brand-dark);font-weight:600">Buildings</a> <span class="muted" aria-hidden="true">›</span> <span aria-current="page">Science Laboratory Building</span></nav>
+
+      <div class="card hero">
+        <div>
+          <div style="display:flex;gap:12px;align-items:center">
+            <h1>Science Laboratory Building</h1>
+            <span class="badge b-critical" style="font-size:.9rem"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span>
+          </div>
+          <div class="facts">
+            <div><span class="muted">Floor area</span><b>1,850 m²</b></div>
+            <div><span class="muted">Meters</span><b>2</b></div>
+            <div><span class="muted">This month</span><b>4,210 kWh</b></div>
+            <div><span class="muted">Estimated cost</span><b>₱50,520</b></div>
+            <div><span class="muted">Last reading</span><b>Oct 7, 2026</b></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <span class="pin" aria-hidden="true">5</span>
+          <button class="btn"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 2h12v5H6zM4 8h16a2 2 0 0 1 2 2v7h-4v5H6v-5H2v-7a2 2 0 0 1 2-2zm4 9v3h8v-3z"/></svg>Print (large print)</button>
+          <button class="btn">Download CSV</button>
+        </div>
+      </div>
+
+      <div class="grid g2">
+        <section class="card" aria-labelledby="eui-h">
+          <div class="card-head"><div style="display:flex;gap:10px;align-items:center"><h2 id="eui-h">Energy use intensity (EUI)</h2><span class="pin" aria-hidden="true">1</span></div></div>
+          <p style="margin:0 0 22px;font-size:1rem"><b style="font-size:1.6rem">284</b> kWh per m² per year — <b style="color:var(--critical)">134 above</b> the High limit (150).</p>
+          <div class="meter" role="meter" aria-valuemin="0" aria-valuemax="300" aria-valuenow="284" aria-valuetext="284 kilowatt-hours per square metre per year, Critical">
+            <span class="tick" style="left:50%"></span><span class="tick" style="left:83.3%"></span><span class="you"></span>
+          </div>
+          <div class="meter-labels"><span style="left:25%">Normal ✓</span><span style="left:50%">150</span><span style="left:66%">High ▲</span><span style="left:83.3%">250</span><span style="left:92%">Critical ✕</span></div>
+          <details open style="margin-top:22px">
+            <summary>What does this mean? <span class="pin" aria-hidden="true" style="margin-left:10px">2</span></summary>
+            <p style="margin:0 0 14px;font-size:.95rem">EUI compares a building's yearly energy use with its size, so big and small buildings can be compared fairly. This building uses almost <b>twice</b> what is considered normal. Common causes: air-conditioners running after class hours, old lab equipment, lights left on.</p>
+          </details>
+        </section>
+
+        <section class="card" aria-labelledby="app-h">
+          <div class="card-head"><div style="display:flex;gap:10px;align-items:center"><h2 id="app-h">Measured vs. listed appliances</h2><span class="pin" aria-hidden="true">3</span></div></div>
+          <table>
+            <caption class="small muted" style="font-weight:400">Measured = meter readings. Estimated = sum of listed appliances (watts × qty × hours × days).</caption>
+            <thead><tr><th scope="col">Source</th><th scope="col" class="num">kWh / month</th><th scope="col" class="num">Cost</th></tr></thead>
+            <tbody>
+              <tr><th scope="row" style="text-transform:none;letter-spacing:0;font-size:.92rem;color:var(--text);border-bottom:1px solid var(--border)">Measured (meters)</th><td class="num">4,210</td><td class="num">₱50,520</td></tr>
+              <tr><th scope="row" style="text-transform:none;letter-spacing:0;font-size:.92rem;color:var(--text);border-bottom:1px solid var(--border)">Estimated (appliances)</th><td class="num">3,020</td><td class="num">₱36,240</td></tr>
+            </tbody>
+          </table>
+          <div class="callout callout-warn" style="margin-top:14px">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 1 21h22zm-1 7h2v6h-2zm0 8h2v2h-2z"/></svg>
+            <div><b>Meters show 39% more than the appliance list.</b> Some equipment may be missing from the list, or something is running longer than expected.</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="card" aria-labelledby="hist-h">
+        <div class="card-head">
+          <div style="display:flex;gap:10px;align-items:center"><h2 id="hist-h">Monthly consumption &amp; forecast</h2><span class="pin" aria-hidden="true">4</span></div>
+          <div class="seg" role="group" aria-label="Show as"><button aria-pressed="false">Chart</button><button aria-pressed="true">Data table</button></div>
+        </div>
+        <table>
+          <caption>Science Laboratory Building — kWh per month. Forecast uses simple exponential smoothing (lowest error on past data).</caption>
+          <thead><tr><th scope="col">Month</th><th scope="col" class="num">kWh</th><th scope="col" class="num">Change</th><th scope="col">Type</th></tr></thead>
+          <tbody>
+            <tr><td>July 2026</td><td class="num">3,880</td><td class="num">—</td><td>Measured</td></tr>
+            <tr><td>August 2026</td><td class="num">3,960</td><td class="num">▲ 2.1%</td><td>Measured</td></tr>
+            <tr><td>September 2026</td><td class="num">4,210</td><td class="num">▲ 6.3%</td><td>Measured</td></tr>
+            <tr><td>October 2026</td><td class="num">≈ 4,050</td><td class="num">—</td><td><i>Forecast</i> (± 6% typical error)</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+</div>
+
+<section class="notes" aria-label="Accessibility notes">
+  <h2>Accessibility notes — Building Profile</h2>
+  <ol>
+    <li><span class="pin">1</span><span><b>The number comes first, then the scale.</b> The meter bar has zone labels with symbols (✓ ▲ ✕) and a full text value for screen readers (<code>role="meter"</code>, <code>aria-valuetext</code>).</span></li>
+    <li><span class="pin">2</span><span><b>"What does this mean?"</b> is an expandable explanation in everyday words. It's a native <code>&lt;details&gt;</code>, so it works with keyboard and screen readers without extra code.</span></li>
+    <li><span class="pin">3</span><span><b>Proper data tables.</b> Captions, column and row headers (<code>scope</code>) and right-aligned numbers let screen readers announce "Measured, kWh per month, 4,210".</span></li>
+    <li><span class="pin">4</span><span><b>Data-table view shown.</b> Every chart can switch to a table. Change is written with ▲/▼ and a percentage. Forecast rows are labelled "Forecast" in words, not only with a dotted line.</span></li>
+    <li><span class="pin">5</span><span><b>Large-print report and CSV.</b> Users with low vision can print at a bigger size. Screen-reader users can open the CSV in a spreadsheet they already know how to use.</span></li>
+  </ol>
+</section>
+<script src="app.js"></script>
+</body>
+</html>

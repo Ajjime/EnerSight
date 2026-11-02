@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=1440">
+<title>08 Dashboard (High contrast + Large text) · EnerSight Mock-up</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+  .rank li { display: grid; grid-template-columns: 210px 1fr 70px 110px; align-items: center; gap: 12px; min-height: 44px; }
+  .rank a { color: var(--text); font-weight: 600; text-decoration: none; font-size: 0.92rem; }
+  .bar-track { height: 14px; background: var(--nodata-bg); border-radius: 999px; overflow: hidden; }
+  .bar { height: 100%; border-radius: 999px; }
+  .bar.critical { background: repeating-linear-gradient(45deg, var(--critical) 0 6px, #dc2626 6px 12px); }
+  .bar.high { background: repeating-linear-gradient(90deg, var(--high) 0 4px, #b45309 4px 8px); }
+  .bar.normal { background: var(--normal); }
+  .attn { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+  .attn li { display: flex; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; align-items: flex-start; }
+  .plain { font-size: 0.95rem; }
+</style>
+</head>
+<body data-page="Dashboard" class="hc large">
+<div class="frame">
+  <a class="skip-link hidden" href="#main">Skip to main content</a>
+  
+  <div id="sidebar"></div>
+  <div class="main">
+    <div id="topbar"></div>
+    <main class="content" id="main">
+      <div class="page-head">
+        <div>
+          <h1>Energy Monitoring Dashboard</h1>
+          <p class="subtitle">Monitor buildings, consumption, OCR readings, and reports.</p>
+        </div>
+        <div class="seg" role="group" aria-label="Period">
+          <button aria-pressed="true">This month</button><button aria-pressed="false">Last month</button><button aria-pressed="false">This year</button>
+        </div>
+      </div>
+
+      <div class="grid g4">
+        <div class="card stat"><div class="label">Buildings</div><div class="value">7</div><div class="sub">6 mapped with GIS coordinates</div></div>
+        <div class="card stat"><div class="label">Consumption</div><div class="value">18,420 <span>kWh</span></div><div class="sub">≈ ₱221,040 estimated bill</div></div>
+        <div class="card stat"><div class="label">Highest EUI</div><div class="value">284 <span>kWh/m²/yr</span></div><div class="sub">Science Laboratory Building</div></div>
+        <div class="card stat"><div class="label">Readings</div><div class="value">42</div><div class="sub">40 verified · 2 need review</div></div>
+      </div>
+
+      <div class="grid g32">
+        <section class="card" aria-labelledby="rank-h">
+          <div class="card-head">
+            <div style="display:flex;gap:10px;align-items:center"><h2 id="rank-h">Building EUI ranking</h2><span class="pin" aria-hidden="true">2</span></div>
+            <span class="small muted">High &gt; 150 · Critical &gt; 250 kWh/m²/yr</span>
+          </div>
+          <ol class="rank">
+            <li><a href="05-building-profile.html">Science Laboratory Building</a><div class="bar-track"><div class="bar critical" style="width:95%"></div></div><b class="num">284</b>
+              <span class="badge b-critical"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span></li>
+            <li><a href="#">Institute of Computing</a><div class="bar-track"><div class="bar critical" style="width:87%"></div></div><b>262</b>
+              <span class="badge b-critical"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span></li>
+            <li><a href="#">Administration Building</a><div class="bar-track"><div class="bar high" style="width:66%"></div></div><b>198</b>
+              <span class="badge b-high"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#fff" stroke-width="1.8"/></svg>High</span></li>
+            <li><a href="#">Learning Resource Center</a><div class="bar-track"><div class="bar high" style="width:57%"></div></div><b>171</b>
+              <span class="badge b-high"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#fff" stroke-width="1.8"/></svg>High</span></li>
+            <li><a href="#">Student Center</a><div class="bar-track"><div class="bar normal" style="width:41%"></div></div><b>122</b>
+              <span class="badge b-normal"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="2" fill="none"/></svg>Normal</span></li>
+            <li><a href="#">New Academic Building</a><div class="bar-track"><div class="bar normal" style="width:32%"></div></div><b>96</b>
+              <span class="badge b-normal"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="2" fill="none"/></svg>Normal</span></li>
+            <li><a href="#">Maintenance and Storage</a><div class="bar-track"></div><b>—</b>
+              <span class="badge b-nodata"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/><path d="M5 8h6" stroke="currentColor" stroke-width="1.8"/></svg>No data</span></li>
+          </ol>
+        </section>
+
+        <section class="card" aria-labelledby="attn-h">
+          <div class="card-head"><div style="display:flex;gap:10px;align-items:center"><h2 id="attn-h">Needs your attention</h2><span class="pin" aria-hidden="true">3</span></div></div>
+          <ul class="attn">
+            <li><span class="badge b-critical"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span>
+              <span class="plain"><b>Science Laboratory Building</b> uses almost <b>twice</b> the normal energy for its size. Check air-conditioners and lab equipment left on overnight.</span></li>
+            <li><span class="badge b-high"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#fff" stroke-width="1.8"/></svg>Review</span>
+              <span class="plain"><b>2 meter readings</b> were read by OCR with low confidence. Please confirm the numbers. <a href="03-add-reading.html" style="color:var(--brand-dark);font-weight:600">Review now</a></span></li>
+            <li><span class="badge b-nodata"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/><path d="M5 8h6" stroke="currentColor" stroke-width="1.8"/></svg>No data</span>
+              <span class="plain"><b>Maintenance and Storage</b> has no reading yet this month.</span></li>
+          </ul>
+        </section>
+      </div>
+
+      <section class="card" aria-labelledby="trend-h">
+        <div class="card-head">
+          <div style="display:flex;gap:10px;align-items:center"><h2 id="trend-h">Monthly consumption, 2026</h2><span class="pin" aria-hidden="true">4</span></div>
+          <div class="seg" role="group" aria-label="Show as"><button aria-pressed="true">Chart</button><button aria-pressed="false">Data table</button></div>
+        </div>
+        <p class="plain" style="margin:0 0 12px" id="trend-sum"><b>Summary:</b> September used 18,420 kWh, <b>up 8%</b> from August (17,000 kWh) and the highest month this year.</p>
+        <div class="chart-wrap">
+          <svg width="1050" height="240" role="img" aria-labelledby="trend-h trend-sum">
+            <defs><pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#047857"/><rect width="3" height="8" fill="#064e3b"/></pattern></defs>
+            <line x1="40" y1="210" x2="1040" y2="210" stroke="#94a3b8"/>
+            <g>
+              <rect x="70"  y="58" width="70" height="152" rx="6" fill="#6ee7b7"/><text class="lbl" x="105" y="50" text-anchor="middle">15.2k</text><text x="105" y="230" text-anchor="middle">Jan</text>
+              <rect x="180" y="62" width="70" height="148" rx="6" fill="#6ee7b7"/><text class="lbl" x="215" y="54" text-anchor="middle">14.8k</text><text x="215" y="230" text-anchor="middle">Feb</text>
+              <rect x="290" y="41" width="70" height="169" rx="6" fill="#6ee7b7"/><text class="lbl" x="325" y="33" text-anchor="middle">16.9k</text><text x="325" y="230" text-anchor="middle">Mar</text>
+              <rect x="400" y="34" width="70" height="176" rx="6" fill="#6ee7b7"/><text class="lbl" x="435" y="26" text-anchor="middle">17.6k</text><text x="435" y="230" text-anchor="middle">Apr</text>
+              <rect x="510" y="29" width="70" height="181" rx="6" fill="#6ee7b7"/><text class="lbl" x="545" y="21" text-anchor="middle">18.1k</text><text x="545" y="230" text-anchor="middle">May</text>
+              <rect x="620" y="46" width="70" height="164" rx="6" fill="#6ee7b7"/><text class="lbl" x="655" y="38" text-anchor="middle">16.4k</text><text x="655" y="230" text-anchor="middle">Jun</text>
+              <rect x="730" y="51" width="70" height="159" rx="6" fill="#6ee7b7"/><text class="lbl" x="765" y="43" text-anchor="middle">15.9k</text><text x="765" y="230" text-anchor="middle">Jul</text>
+              <rect x="840" y="40" width="70" height="170" rx="6" fill="#6ee7b7"/><text class="lbl" x="875" y="32" text-anchor="middle">17.0k</text><text x="875" y="230" text-anchor="middle">Aug</text>
+              <rect x="950" y="26" width="70" height="184" rx="6" fill="url(#hatch)" stroke="#064e3b" stroke-width="2"/><text class="lbl" x="985" y="18" text-anchor="middle">18.4k</text><text class="lbl" x="985" y="230" text-anchor="middle">Sep (now)</text>
+            </g>
+          </svg>
+        </div>
+        <div class="legend"><span><i class="sw" style="background:#6ee7b7"></i>Past months</span><span><i class="sw" style="background:repeating-linear-gradient(45deg,#047857 0 3px,#064e3b 3px 6px)"></i>Current month (striped)</span></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<section class="notes" aria-label="Accessibility notes">
+  <h2>Accessibility notes — Dashboard in High contrast + Large text</h2><p style="margin:6px 0 0">Same screen as 02 with <b>High contrast</b> and <b>A+</b> turned on from the toolbar: black background, white text, yellow highlights, every border 2px, text 15% larger. All pairs exceed WCAG AAA (7:1).</p>
+  <ol>
+    <li><span class="pin">1</span><span><b>"Skip to main content" link</b> appears on the first Tab press, so keyboard and screen-reader users don't have to tab through 10 menu items on every page.</span></li>
+    <li><span class="pin">2</span><span><b>Status never relies on colour alone.</b> Every EUI status has a unique shape (✓ circle, ▲ triangle, ✕ octagon, dashed circle), a word, and the exact number. Critical/High bars also use stripes, for colour-blind users.</span></li>
+    <li><span class="pin">3</span><span><b>Plain-language explanations.</b> Instead of only "EUI 284", users read what it means and what to do. This helps non-technical staff and users with cognitive disabilities.</span></li>
+    <li><span class="pin">4</span><span><b>Charts have a text summary and a data-table view.</b> Screen readers read the summary. Every bar has its value written on it, and the current month is marked with a pattern, not only a different colour.</span></li>
+    <li><span class="pin">A</span><span><b>Accessibility toolbar on every page:</b> text size, high contrast, read-aloud (text-to-speech) and English/Cebuano.</span></li>
+  </ol>
+</section>
+<script src="app.js"></script>
+</body>
+</html>

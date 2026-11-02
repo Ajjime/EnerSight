@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=1440">
+<title>03 Add Meter Reading · EnerSight Mock-up</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .steps { list-style: none; display: flex; gap: 0; padding: 0; margin: 0; }
+  .steps li { flex: 1; display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 0.92rem; color: var(--muted); padding: 12px 16px; border-bottom: 4px solid var(--border); }
+  .steps li .n { width: 30px; height: 30px; border-radius: 999px; display: grid; place-items: center; border: 2px solid currentColor; }
+  .steps li.done { color: var(--brand-dark); border-color: var(--brand); }
+  .steps li.done .n { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .steps li.now { color: var(--text); border-color: var(--focus); }
+  .steps li.now .n { border-color: var(--focus); color: var(--focus); }
+  .drop { border: 3px dashed var(--brand); border-radius: 16px; background: var(--brand-soft); padding: 28px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; }
+  .photo { border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+  .digits { display: flex; gap: 6px; }
+  .digits input { width: 58px; height: 72px; text-align: center; font-size: 2rem; font-weight: 700; padding: 0; font-variant-numeric: tabular-nums; }
+  .digits input.unsure { border: 3px solid var(--high); background: var(--high-bg); }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; font-size: 0.95rem; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; font-weight: 700; text-align: right; }
+  .or { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .85rem; font-weight: 600; width: 100%; }
+  .or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+</style>
+</head>
+<body data-page="Add Meter Reading">
+<div class="frame">
+  <a class="skip-link hidden" href="#main">Skip to main content</a>
+  <div id="sidebar"></div>
+  <div class="main">
+    <div id="topbar"></div>
+    <main class="content" id="main">
+      <div>
+        <h1>Meter Reading OCR</h1>
+        <p class="subtitle">Upload, verify, and save meter readings.</p>
+      </div>
+
+      <div style="display:flex;gap:12px;align-items:center">
+        <span class="pin" aria-hidden="true">1</span>
+        <ol class="steps" aria-label="Progress: step 3 of 3" style="flex:1">
+          <li class="done"><span class="n" aria-hidden="true">✓</span>1. Choose meter <span class="sr">(done)</span></li>
+          <li class="done"><span class="n" aria-hidden="true">✓</span>2. Add photo <span class="sr">(done)</span></li>
+          <li class="now" aria-current="step"><span class="n">3</span>3. Check &amp; save</li>
+        </ol>
+      </div>
+
+      <div class="grid" style="grid-template-columns: 420px 1fr">
+        <section class="card" aria-labelledby="src-h" style="display:flex;flex-direction:column;gap:16px">
+          <div style="display:flex;gap:10px;align-items:center"><h2 id="src-h">Meter photo</h2><span class="pin" aria-hidden="true">2</span></div>
+          <label class="field">Meter
+            <select><option>Science Laboratory Building — Meter SLB-01</option></select>
+          </label>
+          <figure class="photo" style="margin:0">
+            <svg width="370" height="200" viewBox="0 0 370 200" role="img" aria-label="Photo of meter SLB-01 showing the reading 0 8 7 6 5 4">
+              <rect width="370" height="200" fill="#334155"/>
+              <rect x="40" y="30" width="290" height="140" rx="18" fill="#e2e8f0"/>
+              <rect x="70" y="70" width="230" height="56" rx="6" fill="#0f172a"/>
+              <g font-family="monospace" font-size="38" font-weight="700" fill="#f8fafc" text-anchor="middle">
+                <text x="92" y="111">0</text><text x="129" y="111">8</text><text x="166" y="111">7</text><text x="203" y="111">6</text><text x="240" y="111">5</text><text x="277" y="111" fill="#fca5a5">4</text></g>
+              <text x="185" y="152" text-anchor="middle" font-size="13" fill="#334155" font-family="sans-serif">kWh</text>
+              <rect x="66" y="66" width="238" height="64" rx="8" fill="none" stroke="#22c55e" stroke-width="3"/>
+            </svg>
+            <figcaption class="small muted" style="padding:8px 12px">Green box = the area the OCR read. Photo taken Oct 7, 2026, 9:14 AM.</figcaption>
+          </figure>
+          <div class="drop">
+            <b>Retake or replace photo</b>
+            <div style="display:flex;gap:10px">
+              <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3zm3 14a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>Take photo</button>
+              <button class="btn">Choose file</button>
+            </div>
+            <span class="small muted">or drag a JPG/PNG here · max 10 MB</span>
+          </div>
+          <div class="or">OR</div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn" style="flex:1;justify-content:center">⌨ Type reading manually</button>
+            <button class="btn" style="flex:1;justify-content:center"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V22h2v-3.1a7 7 0 0 0 6-6.9z"/></svg>Say the reading</button>
+            <span class="pin" aria-hidden="true">3</span>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="chk-h" style="display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;gap:10px;align-items:center"><h2 id="chk-h">Check the reading</h2><span class="pin" aria-hidden="true">4</span></div>
+
+          <div class="callout callout-warn" role="status">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2 1 21h22zm-1 7h2v6h-2zm0 8h2v2h-2z"/></svg>
+            <div><b>Please check the last digit.</b> The OCR is 96% sure overall, but only 71% sure the last digit is a <b>4</b> (it could be a <b>9</b>). The uncertain box is outlined in orange with a ▲ mark.</div>
+          </div>
+
+          <fieldset style="border:0;padding:0;margin:0">
+            <legend class="field" style="font-weight:600;margin-bottom:8px">Reading in kWh <span class="hint">— edit any box if it's wrong</span></legend>
+            <div class="digits">
+              <input value="0" aria-label="Digit 1 of 6"><input value="8" aria-label="Digit 2 of 6"><input value="7" aria-label="Digit 3 of 6">
+              <input value="6" aria-label="Digit 4 of 6"><input value="5" aria-label="Digit 5 of 6">
+              <input class="unsure show-focus" value="4" aria-label="Digit 6 of 6, uncertain, 71 percent confidence">
+              <span style="align-self:center;color:var(--high);font-weight:700;margin-left:6px">▲ check</span>
+            </div>
+          </fieldset>
+
+          <div class="grid g2">
+            <dl class="kv card" style="margin:0;box-shadow:none">
+              <dt>Previous reading (Sep 7)</dt><dd>087,120</dd>
+              <dt>This reading</dt><dd>087,654</dd>
+              <dt>Used this period</dt><dd style="color:var(--brand-dark)">534 kWh</dd>
+              <dt>Estimated cost (₱12/kWh)</dt><dd>₱6,408</dd>
+            </dl>
+            <div class="callout callout-ok" style="align-self:start">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="2" fill="none"/></svg>
+              <div><b>Looks reasonable.</b> 534 kWh is close to this meter's usual 480–560 kWh per month.</div>
+            </div>
+          </div>
+
+          <label class="field">Note (optional)
+            <input placeholder="" value="Reading taken during class hours">
+          </label>
+
+          <div style="display:flex;gap:12px;justify-content:flex-end;align-items:center">
+            <span class="pin" aria-hidden="true">5</span>
+            <button class="btn btn-lg">Back</button>
+            <button class="btn btn-lg">Save as “needs review”</button>
+            <button class="btn btn-primary btn-lg">Confirm &amp; save reading</button>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+
+<section class="notes" aria-label="Accessibility notes">
+  <h2>Accessibility notes — Add Meter Reading (OCR)</h2>
+  <ol>
+    <li><span class="pin">1</span><span><b>Step indicator with words and numbers.</b> "Step 3 of 3" is written out and announced, so users always know where they are and how much is left (cognitive accessibility).</span></li>
+    <li><span class="pin">2</span><span><b>Photo has alt text and a caption.</b> Screen-reader users hear the reading the photo shows. The large drop zone and "Take photo" button are easy to hit for users with tremors.</span></li>
+    <li><span class="pin">3</span><span><b>No one is forced to use the camera.</b> Users who can't hold a phone steady can type the reading, or say it with voice input.</span></li>
+    <li><span class="pin">4</span><span><b>Uncertain digits are flagged with shape + word + colour</b>, and each digit box has its own label (for example "Digit 6 of 6, uncertain"). The confidence is explained in plain words.</span></li>
+    <li><span class="pin">5</span><span><b>Prevents mistakes before saving.</b> The used kWh, the cost, and a "looks reasonable" check are shown before saving, with Back and "needs review" options (WCAG 3.3.4 Error Prevention).</span></li>
+  </ol>
+</section>
+<style>.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}</style>
+<script src="app.js"></script>
+</body>
+</html>

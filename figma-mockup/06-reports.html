@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=1440">
+<title>06 Reports · EnerSight Mock-up</title>
+<link rel="stylesheet" href="styles.css">
+<style>
+  .filters { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr auto; gap: 16px; align-items: end; }
+  .opts { display: flex; gap: 20px; flex-wrap: wrap; font-size: .92rem; }
+  .opts label { display: flex; gap: 8px; align-items: center; min-height: 44px; }
+  .opts input { width: 22px; height: 22px; min-height: 0; }
+  .doc { border: 1px solid var(--border); border-radius: 12px; padding: 28px 32px; background: var(--card); }
+  .doc h2 { font-size: 1.3rem; }
+</style>
+</head>
+<body data-page="Reports">
+<div class="frame">
+  <a class="skip-link hidden" href="#main">Skip to main content</a>
+  <div id="sidebar"></div>
+  <div class="main">
+    <div id="topbar"></div>
+    <main class="content" id="main">
+      <div class="page-head">
+        <div><h1>Reports</h1><p class="subtitle">Build a printable energy report for any period.</p></div>
+      </div>
+
+      <section class="card" aria-labelledby="f-h" style="display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;gap:10px;align-items:center"><h2 id="f-h">Report settings</h2><span class="pin" aria-hidden="true">1</span></div>
+        <div class="filters">
+          <label class="field">Period
+            <select><option>Custom range</option></select></label>
+          <label class="field">From <span class="hint">MM/DD/YYYY</span>
+            <input type="text" value="07/01/2026"></label>
+          <label class="field">To <span class="hint">MM/DD/YYYY</span>
+            <input class="input-error" type="text" value="06/30/2026" aria-invalid="true" aria-describedby="to-err"></label>
+          <label class="field">Buildings
+            <select><option>All buildings (7)</option></select></label>
+          <button class="btn btn-primary btn-lg">Generate report</button>
+        </div>
+        <span class="error-msg" id="to-err" role="alert"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>"To" date (Jun 30) is before "From" date (Jul 1). Choose a date on or after July 1, 2026.</span>
+        <fieldset style="border:0;padding:0;margin:0">
+          <legend style="font-weight:600;font-size:.9rem;display:flex;gap:10px;align-items:center">Accessible output options <span class="pin" aria-hidden="true">2</span></legend>
+          <div class="opts">
+            <label><input type="checkbox" checked> Tagged, screen-reader-friendly PDF</label>
+            <label><input type="checkbox"> Large print (18 pt)</label>
+            <label><input type="checkbox" checked> Include data tables under every chart</label>
+            <label><input type="checkbox" checked> Plain-language summary at the top</label>
+            <label><input type="checkbox"> Black &amp; white / grayscale safe</label>
+          </div>
+        </fieldset>
+      </section>
+
+      <section aria-labelledby="prev-h" style="display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center"><h2 id="prev-h">Preview</h2><span class="pin" aria-hidden="true">3</span></div>
+          <div style="display:flex;gap:10px"><button class="btn">Download CSV</button><button class="btn">Download PDF</button><button class="btn btn-primary">Print</button></div>
+        </div>
+        <article class="doc">
+          <h2>Campus Energy Report — Jul 1 to Sep 30, 2026</h2>
+          <p class="muted small" style="margin:4px 0 16px">Generated Oct 7, 2026 by Juan Mendoza · Rate ₱12.00 per kWh</p>
+          <div class="callout callout-info" style="margin-bottom:18px">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg>
+            <div><b>In short:</b> The campus used 51,320 kWh (≈ ₱615,840) in three months. 2 buildings are Critical and 2 are High. The Science Laboratory Building alone used 24% of all energy.</div>
+          </div>
+          <table>
+            <caption>Energy use by building, Jul–Sep 2026</caption>
+            <thead><tr><th scope="col">Building</th><th scope="col" class="num">kWh</th><th scope="col" class="num">Cost (₱)</th><th scope="col" class="num">EUI</th><th scope="col">Status</th></tr></thead>
+            <tbody>
+              <tr><td>Science Laboratory Building</td><td class="num">12,050</td><td class="num">144,600</td><td class="num">284</td><td><span class="badge b-critical"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span></td></tr>
+              <tr><td>Institute of Computing</td><td class="num">10,480</td><td class="num">125,760</td><td class="num">262</td><td><span class="badge b-critical"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 1h6l4 4v6l-4 4H5l-4-4V5z" fill="currentColor"/><path d="M5.5 5.5l5 5m0-5-5 5" stroke="#fff" stroke-width="1.8"/></svg>Critical</span></td></tr>
+              <tr><td>Administration Building</td><td class="num">9,210</td><td class="num">110,520</td><td class="num">198</td><td><span class="badge b-high"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#fff" stroke-width="1.8"/></svg>High</span></td></tr>
+              <tr><td>Learning Resource Center</td><td class="num">8,140</td><td class="num">97,680</td><td class="num">171</td><td><span class="badge b-high"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#fff" stroke-width="1.8"/></svg>High</span></td></tr>
+              <tr><td>Student Center</td><td class="num">6,330</td><td class="num">75,960</td><td class="num">122</td><td><span class="badge b-normal"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="2" fill="none"/></svg>Normal</span></td></tr>
+              <tr><td>New Academic Building</td><td class="num">5,110</td><td class="num">61,320</td><td class="num">96</td><td><span class="badge b-normal"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" stroke-width="2" fill="none"/></svg>Normal</span></td></tr>
+              <tr><td>Maintenance and Storage</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td><span class="badge b-nodata"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/><path d="M5 8h6" stroke="currentColor" stroke-width="1.8"/></svg>No data</span></td></tr>
+              <tr><th scope="row" style="text-transform:none;letter-spacing:0;font-size:.92rem;color:var(--text)">Total</th><td class="num"><b>51,320</b></td><td class="num"><b>615,840</b></td><td></td><td></td></tr>
+            </tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+  </div>
+</div>
+
+<section class="notes" aria-label="Accessibility notes">
+  <h2>Accessibility notes — Reports</h2>
+  <ol>
+    <li><span class="pin">1</span><span><b>Helpful form errors.</b> Each field has a visible label and a format hint. The error says exactly what is wrong <i>and</i> how to fix it, is announced, and is linked to the field (WCAG 3.3.1 / 3.3.3).</span></li>
+    <li><span class="pin">2</span><span><b>Accessible output options.</b> Tagged PDF for screen readers, an 18 pt large-print version, tables under every chart, and a grayscale-safe mode for black-and-white printers and colour-blind readers.</span></li>
+    <li><span class="pin">3</span><span><b>The report starts with a plain-language summary</b>, then a real table with a caption and headers. Status keeps its icon + word even when printed in black and white.</span></li>
+  </ol>
+</section>
+<script src="app.js"></script>
+</body>
+</html>
