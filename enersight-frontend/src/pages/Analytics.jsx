@@ -49,7 +49,11 @@ import {
 import API_BASE_URL from "../config";
 import { apiFetch } from "../utils/apiFetch";
 import { formatCompact, formatDecimal, formatNumber } from "../utils/format";
-import { APPLIANCE_GAP_TOLERANCE } from "../utils/buildingProfile";
+import {
+  APPLIANCE_GAP_TOLERANCE,
+  getApplianceEui,
+  getApplianceStatus,
+} from "../utils/buildingProfile";
 import { useElectricityRate } from "../hooks/useElectricityRate";
 import RateNotice from "../components/RateNotice";
 import {
@@ -172,6 +176,16 @@ function getStatusStyle(status) {
   if (status === "Critical" || status === "Low Accuracy")
     return "border-red-100 bg-red-50 text-red-700";
   return "border-slate-100 bg-slate-50 text-slate-600";
+}
+
+// "Measured High · 162": a status with its EUI (kWh/m²/yr), when there is one.
+function EuiChip({ label, status, eui }) {
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium tabular-nums ${getStatusStyle(status)}`}>
+      {label} {status}
+      {eui !== null && status !== "No Data" ? ` · ${formatDecimal(eui, eui < 10 ? 1 : 0)}` : ""}
+    </span>
+  );
 }
 
 function getAccuracyStyle(accuracy) {
@@ -867,6 +881,10 @@ const Analytics = () => {
             row.applianceKwhMonth > 0 && row.monthlyConsumption !== null
               ? (row.monthlyConsumption - row.applianceKwhMonth) / row.applianceKwhMonth
               : null,
+          // The appliance list on the EUI scale. Shown beside the measured status,
+          // never in place of it.
+          expectedEui: getApplianceEui(row.applianceKwhMonth, row.floorArea),
+          expectedStatus: getApplianceStatus(row.applianceKwhMonth, row.floorArea),
         }))
         .sort((a, b) => {
           if (a.gap === null && b.gap === null) return 0;
@@ -1741,7 +1759,7 @@ const Analytics = () => {
               Measured vs Appliance Estimate
               <InfoHint
                 label="Measured vs appliance estimate"
-                text={`Measured: meter use in this period, scaled to an average month. Estimate: watts × quantity × hours per day × days per month ÷ 1000 over the appliance list. A gap over ${formatPercent(APPLIANCE_GAP_TOLERANCE)} is flagged: more than the list explains points to unlisted equipment, longer hours or waste; less suggests the listed hours or quantities are too high.`}
+                text={`Measured: meter use in this period, scaled to an average month. Estimate: watts × quantity × hours per day × days per month ÷ 1000 over the appliance list. A gap over ${formatPercent(APPLIANCE_GAP_TOLERANCE)} is flagged: more than the list explains points to unlisted equipment, longer hours or waste; less suggests the listed hours or quantities are too high. The chips give each building's EUI in kWh/m²/yr: measured from its meter (its status) and expected from its appliance list (kWh per month × 12 ÷ floor area), on the same bands.`}
               />
             </h2>
             <p className="text-xs font-normal text-slate-400">Per month, for each building.</p>
@@ -1770,7 +1788,12 @@ const Analytics = () => {
                   >
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-slate-950">{row.building}</p>
-                      <p className="mt-0.5 text-[11px] text-slate-400">{row.status}</p>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <EuiChip label="Measured" status={row.status} eui={row.isAnnualized ? row.eui : null} />
+                        {row.expectedStatus !== "No Data" && (
+                          <EuiChip label="Expected" status={row.expectedStatus} eui={row.expectedEui} />
+                        )}
+                      </div>
                     </div>
                     <div className="space-y-1.5">
                       <GapBar label="Measured" value={row.monthlyConsumption} max={applianceScaleMax} fillClass="bg-emerald-600" />

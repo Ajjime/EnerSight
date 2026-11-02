@@ -65,7 +65,7 @@ const TABS = [
 const MONTH_ROW_COLUMNS = "1.1fr 1fr 1fr 0.7fr 0.9fr";
 const METER_ROW_COLUMNS = "1.2fr 1fr 0.8fr 0.9fr 1fr 1.2fr 0.7fr 1fr";
 const READING_ROW_COLUMNS = "1.1fr 1fr 1fr 1fr 0.9fr 0.9fr 0.9fr 1fr";
-const APPLIANCE_ROW_COLUMNS = "1.4fr 1fr 1fr 0.8fr 0.8fr 1fr 1fr";
+const APPLIANCE_ROW_COLUMNS = "1.4fr 1fr 1fr 0.8fr 0.8fr 1fr 1fr 1fr";
 const REPORT_ROW_COLUMNS = "1.6fr 1.1fr 1fr 1fr 1fr";
 
 const TONE_STYLES = {
@@ -233,6 +233,89 @@ function MiniStat({ label, value, caption, tone = "none" }) {
       <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">{label}</p>
       <p className={`mt-1 text-xl font-bold tabular-nums ${accent}`}>{value}</p>
       {caption && <p className="mt-0.5 text-xs font-normal text-slate-500">{caption}</p>}
+    </div>
+  );
+}
+
+const STATUS_BAR_FILL = {
+  Critical: "bg-red-600",
+  High: "bg-amber-500",
+  Normal: "bg-emerald-600",
+};
+
+const STATUS_TEXT = {
+  Critical: "text-red-700",
+  High: "text-amber-700",
+  Normal: "text-emerald-700",
+};
+
+// Measured and expected EUI on one scale, with the High and Critical lines marked.
+// `measured` is null when the readings cannot be graded yet.
+function EuiComparison({ measured, measuredStatus, expected, expectedStatus }) {
+  const thresholds = [EUI_HIGH_THRESHOLD, EUI_CRITICAL_THRESHOLD];
+  const scaleMax = Math.max(EUI_CRITICAL_THRESHOLD * 1.2, measured || 0, expected || 0) * 1.05;
+  const position = (value) => `${Math.min(100, (value / scaleMax) * 100)}%`;
+  const rows = [
+    { label: "Measured", value: measured, status: measuredStatus },
+    { label: "Expected", value: expected, status: expectedStatus },
+  ];
+
+  return (
+    <div className="mt-4 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+        Energy intensity · kWh/m²/yr
+        <InfoHint term="expectedEui" />
+      </p>
+
+      <div className="mt-2 space-y-2.5">
+        {rows.map((row) => (
+          <div key={row.label} className="grid grid-cols-[64px_1fr_116px] items-center gap-3 text-xs">
+            <span className="text-slate-500">{row.label}</span>
+            <div className="relative h-2.5 rounded-full bg-white ring-1 ring-slate-200">
+              {row.value !== null && (
+                <div
+                  className={`h-full rounded-full ${STATUS_BAR_FILL[row.status] || "bg-slate-300"}`}
+                  style={{ width: position(Math.max(row.value, scaleMax * 0.01)) }}
+                />
+              )}
+              {thresholds.map((threshold) => (
+                <span
+                  key={threshold}
+                  aria-hidden="true"
+                  className="absolute -inset-y-1 w-px bg-slate-400"
+                  style={{ left: position(threshold) }}
+                />
+              ))}
+            </div>
+            <span className="text-right tabular-nums">
+              {row.value === null ? (
+                <span className="text-slate-400">—</span>
+              ) : (
+                <>
+                  <span className="font-semibold text-slate-950">{formatDecimal(row.value, 1)}</span>
+                  <span className={`font-medium ${STATUS_TEXT[row.status] || "text-slate-500"}`}> · {row.status}</span>
+                </>
+              )}
+            </span>
+          </div>
+        ))}
+
+        <div aria-hidden="true" className="grid grid-cols-[64px_1fr_116px] gap-3 text-[11px] text-slate-400">
+          <span />
+          <div className="relative h-3">
+            {thresholds.map((threshold) => (
+              <span
+                key={threshold}
+                className="absolute -translate-x-1/2 tabular-nums"
+                style={{ left: position(threshold) }}
+              >
+                {threshold}
+              </span>
+            ))}
+          </div>
+          <span />
+        </div>
+      </div>
     </div>
   );
 }
@@ -861,8 +944,10 @@ function ReadingsTab({ profile }) {
   );
 }
 
-function AppliancesTab({ profile, rate, error }) {
+function AppliancesTab({ building, profile, rate, error }) {
   const { totals, applianceComparison: comparison } = profile;
+  const hasFloorArea = Number(building.floor_area || 0) > 0;
+  const measuredEui = totals.isAnnualized && totals.status !== "No Data" ? totals.eui : null;
 
   if (error) {
     return <EmptyState icon={AlertTriangle} variant="blocked" title="Appliances could not be loaded" description={error} />;
@@ -902,6 +987,15 @@ function AppliancesTab({ profile, rate, error }) {
             <p className="mt-1 font-medium">{comparison.text}</p>
           </div>
         </div>
+
+        {hasFloorArea && totals.estimatedEui > 0 && (
+          <EuiComparison
+            measured={measuredEui}
+            measuredStatus={totals.status}
+            expected={totals.estimatedEui}
+            expectedStatus={totals.estimatedStatus}
+          />
+        )}
       </Section>
 
       <Section
@@ -910,13 +1004,13 @@ function AppliancesTab({ profile, rate, error }) {
       >
         <DataTable
           columns={APPLIANCE_ROW_COLUMNS}
-          minWidth={760}
-          headers={["Appliance", "Category", "Watts × qty", "Hours/day", "Days/month", "kWh/month", "Cost/month"]}
+          minWidth={860}
+          headers={["Appliance", "Category", "Watts × qty", "Hours/day", "Days/month", "kWh/month", "kWh/m²/yr", "Cost/month"]}
         >
           {profile.appliances.map((appliance) => (
             <div
               key={appliance.appliance_id}
-              className="grid grid-cols-[1.4fr_1fr_1fr_0.8fr_0.8fr_1fr_1fr] items-center gap-3 px-4 py-3 text-sm"
+              className="grid grid-cols-[1.4fr_1fr_1fr_0.8fr_0.8fr_1fr_1fr_1fr] items-center gap-3 px-4 py-3 text-sm"
             >
               <span className="truncate font-semibold text-slate-950" title={appliance.name}>
                 {appliance.name}
@@ -928,6 +1022,7 @@ function AppliancesTab({ profile, rate, error }) {
               <span className="tabular-nums text-slate-700">{formatDecimal(appliance.hours_per_day, 1)}</span>
               <span className="tabular-nums text-slate-700">{appliance.days_per_month}</span>
               <span className="tabular-nums font-semibold text-slate-950">{formatDecimal(appliance.kwhMonth, 1)}</span>
+              <span className="tabular-nums text-slate-700">{hasFloorArea ? formatDecimal(appliance.eui, 1) : "—"}</span>
               <span className="tabular-nums text-slate-700">{formatPeso(appliance.costMonth, { decimals: 0 })}</span>
             </div>
           ))}
@@ -1235,7 +1330,7 @@ export default function BuildingProfile({ buildingId, buildingName = "", onClose
               {activeTab === "meters" && <MetersTab profile={profile} />}
               {activeTab === "readings" && <ReadingsTab profile={profile} />}
               {activeTab === "appliances" && (
-                <AppliancesTab profile={profile} rate={rate} error={data.applianceError} />
+                <AppliancesTab building={building} profile={profile} rate={rate} error={data.applianceError} />
               )}
               {activeTab === "reports" && <ReportsTab reports={data.reports} error={data.reportError} />}
             </div>

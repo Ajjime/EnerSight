@@ -25,11 +25,31 @@ import {
   isManualReading,
 } from "./readingQuality";
 
-const DAYS_PER_MONTH = 365 / 12;
+const MONTHS_PER_YEAR = 12;
+const DAYS_PER_MONTH = 365 / MONTHS_PER_YEAR;
 
 // Measured use within 15% of the appliance estimate counts as a match. Analytics
 // grades its measured-vs-estimate section with the same figure.
 export const APPLIANCE_GAP_TOLERANCE = 0.15;
+
+/**
+ * The appliance estimate in the EUI's own unit (kWh/m²/yr): a month's kWh × 12 ÷
+ * floor area. The EUI formula and its bands stay as they are; this only feeds
+ * them a different input, so the result is the intensity the building would have
+ * if it used exactly what its appliance list adds up to. It is shown beside the
+ * measured EUI and never replaces or adds to it: the meter already counts the
+ * appliances, so adding the two would count the same electricity twice.
+ *
+ * 0 when the floor area is missing, like computeEui.
+ */
+export function getApplianceEui(kwhMonth, floorArea) {
+  return computeEui(Number(kwhMonth || 0) * MONTHS_PER_YEAR, floorArea);
+}
+
+/** The appliance list's grade on the same bands as the measured status. */
+export function getApplianceStatus(kwhMonth, floorArea) {
+  return getEnergyStatus(Number(kwhMonth || 0) * MONTHS_PER_YEAR, floorArea);
+}
 
 function toTime(value) {
   const time = new Date(value).getTime();
@@ -249,7 +269,13 @@ export function buildBuildingProfile({
     .map((appliance) => {
       const kwhMonth = applianceKwhMonth(appliance);
 
-      return { ...appliance, kwhMonth, costMonth: kwhMonth * rate };
+      return {
+        ...appliance,
+        kwhMonth,
+        costMonth: kwhMonth * rate,
+        // Each appliance's share of the expected EUI; the shares add up to it.
+        eui: getApplianceEui(kwhMonth, floorArea),
+      };
     })
     .sort((a, b) => b.kwhMonth - a.kwhMonth);
   const estimatedKwhMonth = applianceRows.reduce((sum, appliance) => sum + appliance.kwhMonth, 0);
@@ -290,6 +316,8 @@ export function buildBuildingProfile({
       measuredKwhMonth,
       estimatedKwhMonth,
       estimatedCostMonth: estimatedKwhMonth * rate,
+      estimatedEui: getApplianceEui(estimatedKwhMonth, floorArea),
+      estimatedStatus: getApplianceStatus(estimatedKwhMonth, floorArea),
       peakMonth,
       latestMonth: monthly.at(-1) || null,
       previousMonth: monthly.length > 1 ? monthly.at(-2) : null,

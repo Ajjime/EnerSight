@@ -3,9 +3,11 @@ import {
   buildBuildingProfile,
   buildMonthlyConsumption,
   getApplianceComparison,
+  getApplianceEui,
+  getApplianceStatus,
   getReadingDifferential,
 } from "./buildingProfile";
-import { getEnergyStatus } from "./energyStatus";
+import { EUI_CRITICAL_THRESHOLD, EUI_HIGH_THRESHOLD, getEnergyStatus } from "./energyStatus";
 
 const building = { building_id: 1, name: "Admin", floor_area: 100 };
 
@@ -104,6 +106,45 @@ describe("buildBuildingProfile", () => {
     expect(profile.totals.measuredKwhMonth).toBeCloseTo(2200 / (profile.totals.spanDays / (365 / 12)));
   });
 
+  it("expresses the appliance estimate as an expected EUI on the same bands", () => {
+    // 480 kWh/month x 12 = 5,760 kWh/yr over 100 m².
+    expect(profile.totals.estimatedEui).toBeCloseTo(57.6);
+    expect(profile.totals.estimatedStatus).toBe(getEnergyStatus(5760, 100));
+    expect(profile.appliances[0].eui).toBeCloseTo(57.6);
+  });
+
+  it("splits the expected EUI into shares that add up to it", () => {
+    const listed = [
+      { appliance_id: 1, building_id: 1, name: "Aircon", wattage: 1200, quantity: 6, hours_per_day: 8, days_per_month: 22 },
+      { appliance_id: 2, building_id: 1, name: "Lights", wattage: 18, quantity: 80, hours_per_day: 10, days_per_month: 22 },
+    ];
+    const withShares = buildBuildingProfile({ building, meters, readings, appliances: listed });
+    const sum = withShares.appliances.reduce((total, appliance) => total + appliance.eui, 0);
+
+    expect(sum).toBeCloseTo(withShares.totals.estimatedEui);
+    expect(withShares.appliances.map((appliance) => appliance.name)).toEqual(["Aircon", "Lights"]);
+  });
+
+  it("never lets the appliance list change the measured status or EUI", () => {
+    const heavy = [
+      { appliance_id: 1, building_id: 1, name: "Chiller", wattage: 50000, quantity: 1, hours_per_day: 24, days_per_month: 30 },
+    ];
+    const without = buildBuildingProfile({ building, meters, readings, appliances: [] });
+    const withHeavy = buildBuildingProfile({ building, meters, readings, appliances: heavy });
+
+    expect(withHeavy.totals.estimatedStatus).toBe("Critical");
+    expect(withHeavy.totals.status).toBe(without.totals.status);
+    expect(withHeavy.totals.eui).toBe(without.totals.eui);
+    expect(withHeavy.recommendation).toBe(without.recommendation);
+  });
+
+  it("has no expected EUI without appliances", () => {
+    const without = buildBuildingProfile({ building, meters, readings, appliances: [] });
+
+    expect(without.totals.estimatedEui).toBe(0);
+    expect(without.totals.estimatedStatus).toBe("No Data");
+  });
+
   it("finds the peak and latest months", () => {
     expect(profile.totals.peakMonth.month).toBe("Jan 2026");
     expect(profile.totals.latestMonth.month).toBe("Apr 2026");
@@ -118,6 +159,38 @@ describe("buildBuildingProfile", () => {
     expect(empty.monthly).toEqual([]);
     expect(empty.applianceComparison.gap).toBeNull();
     expect(empty.recommendation).toMatch(/floor area/);
+  });
+
+  it("cannot grade the appliance list without a floor area", () => {
+    const noArea = buildBuildingProfile({
+      building: { ...building, floor_area: 0 },
+      meters,
+      readings,
+      appliances,
+    });
+
+    expect(noArea.totals.estimatedKwhMonth).toBe(480);
+    expect(noArea.totals.estimatedEui).toBe(0);
+    expect(noArea.totals.estimatedStatus).toBe("No Data");
+    expect(noArea.appliances[0].eui).toBe(0);
+  });
+});
+
+describe("getApplianceEui", () => {
+  it("is a month's kWh x 12 over the floor area", () => {
+    // The worked example: 2,766.72 kWh/month over 400 m².
+    expect(getApplianceEui(2766.72, 400)).toBeCloseTo(83.0, 1);
+    expect(getApplianceEui(100, 0)).toBe(0);
+    expect(getApplianceEui(0, 400)).toBe(0);
+  });
+
+  it("grades on the same thresholds as measured use", () => {
+    const kwhMonthAt = (eui) => (eui * 100) / 12;
+
+    expect(getApplianceStatus(kwhMonthAt(EUI_HIGH_THRESHOLD), 100)).toBe("Normal");
+    expect(getApplianceStatus(kwhMonthAt(EUI_HIGH_THRESHOLD + 1), 100)).toBe("High");
+    expect(getApplianceStatus(kwhMonthAt(EUI_CRITICAL_THRESHOLD + 1), 100)).toBe("Critical");
+    expect(getApplianceStatus(0, 100)).toBe("No Data");
   });
 });
 

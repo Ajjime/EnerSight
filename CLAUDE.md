@@ -70,6 +70,12 @@ LocationPickerModal and UploadOCR.
   from meter readings; estimated = appliances, `watts × quantity × hours/day × days/month
   ÷ 1000`. Cost = kWh × one global rate (`settings` table `rate_per_kwh`, default ₱12;
   backend `get_rate_per_kwh`, frontend `useElectricityRate`).
+- **Expected EUI (appliances on the EUI scale):** `getApplianceEui` in
+  `utils/buildingProfile.js` = appliance kWh/month × 12 ÷ floor area, graded on the
+  same bands (`getApplianceStatus`); each appliance gets its share in kWh/m²/yr. It is
+  shown beside the measured EUI (Building Profile Appliances tab, Analytics chips) and
+  never becomes or changes a building's status: the meter already counts the
+  appliances, so adding the two double-counts. The EUI formula and bands stay as is.
 - **Periods:** `src/utils/periods.js` (This/Last Month, This Year, Custom Range and the
   comparison window), shared by Analytics and Reports.
 - **Meter rounds:** Add Meter Reading lists meters as "to read" or "done" for the chosen

@@ -47,6 +47,14 @@ export const GLOSSARY = {
       "The two are never added together. A gap between them usually means an appliance list is out of date, not that a meter is wrong.",
   },
 
+  expectedEui: {
+    term: "Expected EUI",
+    definition:
+      "The appliance list in the same unit as the EUI: its kWh per month x 12, divided by the floor area, graded on the same Normal, High and Critical bands.",
+    soWhat:
+      "The building's status still comes from its meter readings. Measured above expected means energy the appliance list does not explain, and the appliances with the most kWh/m²/yr are the ones to check first.",
+  },
+
   ocrAccuracy: {
     term: "Photo reading confidence",
     definition:
