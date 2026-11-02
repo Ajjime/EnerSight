@@ -65,10 +65,9 @@ def apply_reading_rules(reading_data: dict) -> dict:
     return reading_data
 
 
-def get_last_reading_value(db: Session, meter_id: int):
-    """Returns (reading_value, has_prior) for the most recent record of this meter.
-    Falls back to the meter's initial_reading when no records exist yet."""
-    last = (
+def get_last_reading(db: Session, meter_id: int):
+    """The meter's most recent record (latest date, then highest id), or None."""
+    return (
         db.query(models.ConsumptionRecord)
         .filter(models.ConsumptionRecord.meter_id == meter_id)
         .order_by(
@@ -77,11 +76,42 @@ def get_last_reading_value(db: Session, meter_id: int):
         )
         .first()
     )
+
+
+def get_last_reading_value(db: Session, meter_id: int):
+    """Returns (reading_value, has_prior) for the most recent record of this meter.
+    Falls back to the meter's initial_reading when no records exist yet."""
+    last = get_last_reading(db, meter_id)
     if last:
         return float(last.reading_value), True
     meter = db.query(models.Meter).filter(models.Meter.meter_id == meter_id).first()
     initial = float(meter.initial_reading or 0.0) if meter else 0.0
     return initial, False
+
+
+def get_neighbours(db: Session, record):
+    """(reading before, reading after) this one on the same meter, in the order the
+    chain runs: by date, then by id. Either may be None."""
+    chain = (
+        db.query(models.ConsumptionRecord)
+        .filter(models.ConsumptionRecord.meter_id == record.meter_id)
+        .order_by(
+            models.ConsumptionRecord.reading_date.asc(),
+            models.ConsumptionRecord.record_id.asc(),
+        )
+        .all()
+    )
+    index = next(
+        (i for i, item in enumerate(chain) if item.record_id == record.record_id), None
+    )
+
+    if index is None:
+        return None, None
+
+    before = chain[index - 1] if index > 0 else None
+    after = chain[index + 1] if index + 1 < len(chain) else None
+
+    return before, after
 
 
 def reading_differential(record) -> float:
@@ -131,9 +161,28 @@ def create_reading(
     if has_prior:
         reading_data["previous_reading"] = last_value
     elif reading_data.get("previous_reading") is None:
-        reading_data["previous_reading"] = 0.0
+        # The meter's starting reading (last_value falls back to it). 0 here
+        # counted a running meter's whole register as its first reading's use.
+        reading_data["previous_reading"] = last_value
 
     reading_data = apply_reading_rules(reading_data)
+
+    # Each reading measures from the one dated before it, and its previous value is
+    # the latest reading's. Slipping one in earlier would measure it from a later
+    # reading and leave the chain after it counting the same kWh twice.
+    last = get_last_reading(db, reading.meter_id) if has_prior else None
+    new_date = reading_data.get("reading_date")
+
+    if last and new_date is not None and new_date < last.reading_date:
+        raise HTTPException(
+            status_code=400,
+            # No date in the message: the stored one is UTC and would print a day
+            # off for a reading taken before 8 AM in the Philippines.
+            detail=(
+                "This reading is dated before the meter's latest reading. "
+                "Readings go in date order."
+            ),
+        )
 
     # Attribution comes from the token, never from the request body.
     reading_data["user_id"] = current_user.user_id
@@ -203,12 +252,50 @@ def update_reading(
     if not meter:
         raise HTTPException(status_code=404, detail="Meter not found")
 
+    # Moving a reading to another meter would break two chains at once.
+    if updated_reading.meter_id != reading.meter_id:
+        raise HTTPException(
+            status_code=400,
+            detail="A reading cannot move to another meter. Delete it and add it to the right one.",
+        )
+
+    before, after = get_neighbours(db, reading)
+    reading_data = updated_reading.model_dump()
+
+    # The previous value is the reading before this one, as on create. Only a
+    # meter's first reading takes it from the request.
+    if before is not None:
+        reading_data["previous_reading"] = float(before.reading_value)
+    elif reading_data.get("previous_reading") is None:
+        reading_data["previous_reading"] = float(reading.previous_reading or 0.0)
+
     # user_id and is_verified are no longer accepted as input, so an edit can no
     # longer reassign who recorded a reading, nor silently unverify it by omitting
     # the field (the schema default used to be False).
     #
     # Popping an omitted reading_date keeps the record's existing timestamp.
-    reading_data = apply_reading_rules(updated_reading.model_dump())
+    reading_data = apply_reading_rules(reading_data)
+
+    new_date = reading_data.get("reading_date", reading.reading_date)
+
+    if (before is not None and new_date < before.reading_date) or (
+        after is not None and new_date > after.reading_date
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="The new date would move this reading past its neighbours. Readings go in date order.",
+        )
+
+    new_value = float(reading_data["reading_value"])
+
+    if after is not None and float(after.reading_value) < new_value:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reading {new_value:,.2f} is higher than the next reading on this "
+                f"meter ({float(after.reading_value):,.2f}). A meter only counts up."
+            ),
+        )
 
     # What OCR originally read is evidence, not an editable field. An edit form
     # that does not send it would otherwise erase it.
@@ -216,6 +303,12 @@ def update_reading(
 
     for key, value in reading_data.items():
         setattr(reading, key, value)
+
+    # The next reading measures from this one, so it follows the new value. Left
+    # alone, the two would disagree about the register and the kWh between them
+    # would be counted twice or lost.
+    if after is not None:
+        after.previous_reading = new_value
 
     audit.log_action(
         db, audit.READING_UPDATED, current_user.user_id, f"#{reading.record_id}"
@@ -295,6 +388,15 @@ def delete_reading(
 
     if not reading:
         raise HTTPException(status_code=404, detail="Reading not found")
+
+    # The next reading takes over this one's starting value, so its interval now
+    # runs across both and no kWh are lost. Without this it kept measuring from the
+    # deleted value: deleting the middle of three monthly readings dropped a third
+    # of the energy.
+    _, after = get_neighbours(db, reading)
+
+    if after is not None:
+        after.previous_reading = reading.previous_reading
 
     audit.log_action(
         db,
